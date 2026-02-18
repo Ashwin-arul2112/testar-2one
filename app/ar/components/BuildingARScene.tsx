@@ -6,26 +6,30 @@ import { useGLTF } from "@react-three/drei"
 import { useEffect, useRef } from "react"
 import * as THREE from "three"
 import { SkeletonUtils } from "three-stdlib"
+import { useRouter } from "next/navigation"
 
-export const store=createXRStore({
+export const store = createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
 export const xrState={
   placed:false,
   placing:false,
+  animating:false,
+  redirecting:false,
   object:null as {
     anchor:any
-    object:THREE.Group
+    object:THREE.Object3D
+    mixer?:THREE.AnimationMixer
+    actions?:THREE.AnimationAction[]
   }|null
 }
 
-const REAL_WORLD_SIZE=0.8
-
 function PlacementSystem(){
 
-  const {session}=useXR()
-  const buildingGLTF=useGLTF("/models/building.glb")
+  const { session } = useXR()
+  const router = useRouter()
+  const gltf = useGLTF("/models/gift_box.glb")
 
   const viewerSpace=useRef<XRReferenceSpace|null>(null)
   const localSpace=useRef<XRReferenceSpace|null>(null)
@@ -68,6 +72,24 @@ function PlacementSystem(){
     const onSelect=()=>{
 
       if(!lastHit.current) return
+      if(xrState.redirecting) return
+
+      /* SECOND TAP → PLAY */
+
+      if(xrState.placed && !xrState.animating){
+
+        xrState.animating=true
+
+        xrState.object?.actions?.forEach(a=>{
+          a.reset()
+          a.play()
+        })
+
+        return
+      }
+
+      /* BLOCK MULTIPLE PLACE */
+
       if(xrState.placed || xrState.placing) return
       if(!localSpace.current) return
 
@@ -82,21 +104,53 @@ function PlacementSystem(){
       .createAnchor(hitPose.transform)
       .then((anchor:any)=>{
 
-        const model=
-        SkeletonUtils.clone(buildingGLTF.scene)
+        const model=SkeletonUtils.clone(gltf.scene)
 
         const box=new THREE.Box3().setFromObject(model)
         const size=new THREE.Vector3()
         box.getSize(size)
         const max=Math.max(size.x,size.y,size.z)
 
-        model.scale.setScalar(REAL_WORLD_SIZE/max)
+        model.scale.setScalar(0.6/max)
         model.updateMatrixWorld(true)
 
-        const pivot=new THREE.Group()
-        pivot.add(model)
+        let mixer:THREE.AnimationMixer|undefined
+        let actions:THREE.AnimationAction[]=[]
 
-        xrState.object={anchor,object:pivot}
+        if(gltf.animations.length){
+
+          mixer=new THREE.AnimationMixer(model)
+
+          gltf.animations.forEach((clip)=>{
+
+            const action=
+            mixer!.clipAction(clip)
+
+            action.setLoop(THREE.LoopOnce,1)
+            action.clampWhenFinished=true
+            action.paused=true
+
+            actions.push(action)
+          })
+
+          mixer.addEventListener("finished",async ()=>{
+
+            if(xrState.redirecting) return
+            xrState.redirecting=true
+
+            try{
+
+              await (session as XRSession).end()
+
+              setTimeout(()=>{
+                router.push("/ar/building")
+              },500)
+
+            }catch{}
+          })
+        }
+
+        xrState.object={anchor,object:model,mixer,actions}
         xrState.placed=true
       })
     }
@@ -108,7 +162,7 @@ function PlacementSystem(){
 
   /* FRAME */
 
-  useFrame((_,__,frame)=>{
+  useFrame((_,delta,frame)=>{
 
     if(!frame) return
     if(!hitSource.current) return
@@ -165,6 +219,8 @@ function PlacementSystem(){
       objPose.transform.orientation.z,
       objPose.transform.orientation.w
     )
+
+    xrState.object.mixer?.update(delta)
   })
 
   return(
@@ -181,7 +237,7 @@ function PlacementSystem(){
   )
 }
 
-export default function BuildingARScene(){
+export default function ARScene(){
 
   useEffect(()=>{
     const start=async()=>{
@@ -193,19 +249,17 @@ export default function BuildingARScene(){
   },[])
 
   return(
-    <div style={{width:"100%",height:"100%"}}>
-      <Canvas
-        shadows
-        gl={{antialias:true,alpha:true}}
-        onCreated={({gl,scene})=>{
-          gl.autoClear=false
-          scene.background=null
-          gl.outputColorSpace=THREE.SRGBColorSpace
-          gl.toneMapping=THREE.ACESFilmicToneMapping
-        }}
-      >
+    <div style={{
+      width:"100%",
+      height:"65vh",
+      borderRadius:"24px",
+      overflow:"hidden",
+      background:"#000",
+      position:"relative"
+    }}>
+      <Canvas shadows>
         <XR store={store}>
-          <ambientLight intensity={0.8}/>
+          <ambientLight intensity={0.6}/>
           <PlacementSystem/>
         </XR>
       </Canvas>
