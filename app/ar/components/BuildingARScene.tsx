@@ -7,16 +7,17 @@ import { useEffect, useRef } from "react"
 import * as THREE from "three"
 import { SkeletonUtils } from "three-stdlib"
 
-/* XR STORE (NEW SESSION) */
+/* XR STORE */
 
 export const store=createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
-/* GLOBAL */
+/* GLOBAL STATE */
 
 export const xrState={
   placed:false,
+  placing:false,   // 🔴 LOCK
   object:null as {
     anchor:any
     object:THREE.Group
@@ -54,7 +55,7 @@ function PlacementSystem(){
 
   },[session])
 
-  /* TAP → PLACE */
+  /* TAP */
 
   useEffect(()=>{
 
@@ -64,7 +65,14 @@ function PlacementSystem(){
     const onSelect=()=>{
 
       if(!lastHit.current) return
-      if(xrState.placed) return
+
+      /* 🚨 BLOCK MULTIPLE */
+
+      if(xrState.placed || xrState.placing) return
+
+      /* 🔴 LOCK IMMEDIATELY */
+
+      xrState.placing=true
 
       ;(lastHit.current as any)
       .createAnchor()
@@ -101,10 +109,12 @@ function PlacementSystem(){
     if(!frame) return
     if(!hitSource.current) return
 
-    const refSpace=store.getState().originReferenceSpace
+    const refSpace=
+    store.getState().originReferenceSpace
     if(!refSpace) return
 
-    const hits=frame.getHitTestResults(hitSource.current)
+    const hits=
+    frame.getHitTestResults(hitSource.current)
 
     if(hits.length===0){
       reticle.current.visible=false
@@ -116,15 +126,23 @@ function PlacementSystem(){
 
     lastHit.current=hits[0]
 
-    reticle.current.visible=true
+    /* SHOW RETICLE ONLY BEFORE PLACE */
 
-    reticle.current.position.set(
-      pose.transform.position.x,
-      pose.transform.position.y,
-      pose.transform.position.z
-    )
+    if(!xrState.placed){
 
-    reticle.current.rotation.x=-Math.PI/2
+      reticle.current.visible=true
+
+      reticle.current.position.set(
+        pose.transform.position.x,
+        pose.transform.position.y,
+        pose.transform.position.z
+      )
+
+      reticle.current.rotation.x=-Math.PI/2
+
+    }else{
+      reticle.current.visible=false
+    }
 
     if(!xrState.object) return
 
@@ -186,8 +204,6 @@ export default function BuildingARScene(){
         shadows
         gl={{antialias:true,alpha:true}}
         onCreated={({gl,scene})=>{
-
-          /* REQUIRED FOR AR PASSTHROUGH */
 
           gl.autoClear=false
           scene.background=null
