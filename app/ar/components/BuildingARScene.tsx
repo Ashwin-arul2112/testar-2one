@@ -7,13 +7,13 @@ import { useEffect, useRef } from "react"
 import * as THREE from "three"
 import { SkeletonUtils } from "three-stdlib"
 
-/* NEW XR STORE (SEPARATE SESSION) */
+/* XR STORE (NEW SESSION) */
 
-export const store = createXRStore({
+export const store=createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
-/* GLOBAL STATE */
+/* GLOBAL */
 
 export const xrState={
   placed:false,
@@ -22,8 +22,6 @@ export const xrState={
     object:THREE.Group
   }|null
 }
-
-/* BUILDING SIZE IN METERS */
 
 const REAL_WORLD_SIZE=0.8
 
@@ -56,7 +54,7 @@ function PlacementSystem(){
 
   },[session])
 
-  /* TAP → PLACE BUILDING */
+  /* TAP → PLACE */
 
   useEffect(()=>{
 
@@ -86,11 +84,7 @@ function PlacementSystem(){
         const pivot=new THREE.Group()
         pivot.add(model)
 
-        xrState.object={
-          anchor,
-          object:pivot
-        }
-
+        xrState.object={anchor,object:pivot}
         xrState.placed=true
       })
     }
@@ -107,12 +101,10 @@ function PlacementSystem(){
     if(!frame) return
     if(!hitSource.current) return
 
-    const refSpace=
-    store.getState().originReferenceSpace
+    const refSpace=store.getState().originReferenceSpace
     if(!refSpace) return
 
-    const hits=
-    frame.getHitTestResults(hitSource.current)
+    const hits=frame.getHitTestResults(hitSource.current)
 
     if(hits.length===0){
       reticle.current.visible=false
@@ -132,12 +124,7 @@ function PlacementSystem(){
       pose.transform.position.z
     )
 
-    reticle.current.quaternion.set(
-      pose.transform.orientation.x,
-      pose.transform.orientation.y,
-      pose.transform.orientation.z,
-      pose.transform.orientation.w
-    )
+    reticle.current.rotation.x=-Math.PI/2
 
     if(!xrState.object) return
 
@@ -194,13 +181,23 @@ export default function BuildingARScene(){
   },[])
 
   return(
-    <div style={{
-      width:"100%",
-      height:"65vh",
-      overflow:"hidden",
-      background:"#000"
-    }}>
-      <Canvas shadows>
+    <div style={{width:"100%",height:"100%"}}>
+      <Canvas
+        shadows
+        gl={{antialias:true,alpha:true}}
+        onCreated={({gl,scene})=>{
+
+          /* REQUIRED FOR AR PASSTHROUGH */
+
+          gl.autoClear=false
+          scene.background=null
+
+          gl.outputColorSpace=THREE.SRGBColorSpace
+          gl.toneMapping=THREE.ACESFilmicToneMapping
+          gl.toneMappingExposure=1
+
+        }}
+      >
         <XR store={store}>
           <ambientLight intensity={0.8}/>
           <PlacementSystem/>

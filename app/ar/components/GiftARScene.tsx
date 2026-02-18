@@ -14,7 +14,7 @@ export const store=createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
-/* GLOBAL STATE */
+/* GLOBAL */
 
 export const xrState={
   placed:false,
@@ -30,7 +30,6 @@ function PlacementSystem(){
 
   const {session}=useXR()
   const router=useRouter()
-
   const giftGLTF=useGLTF("/models/gift_box.glb")
 
   const hitSource=useRef<any>(null)
@@ -68,7 +67,7 @@ function PlacementSystem(){
 
       if(!lastHit.current) return
 
-      /* PLAY OPEN ANIMATION */
+      /* PLAY OPEN */
 
       if(xrState.placed && xrState.object?.actions){
 
@@ -81,7 +80,7 @@ function PlacementSystem(){
         return
       }
 
-      /* PLACE GIFT */
+      /* PLACE */
 
       ;(lastHit.current as any)
       .createAnchor()
@@ -119,7 +118,7 @@ function PlacementSystem(){
             actions.push(action)
           })
 
-          /* WHEN GIFT OPENS → CLOSE CAMERA + REDIRECT */
+          /* AFTER OPEN */
 
           mixer.addEventListener("finished",async ()=>{
 
@@ -140,13 +139,7 @@ function PlacementSystem(){
           })
         }
 
-        xrState.object={
-          anchor,
-          object:pivot,
-          mixer,
-          actions
-        }
-
+        xrState.object={anchor,object:pivot,mixer,actions}
         xrState.placed=true
       })
     }
@@ -186,12 +179,7 @@ function PlacementSystem(){
       pose.transform.position.z
     )
 
-    reticle.current.quaternion.set(
-      pose.transform.orientation.x,
-      pose.transform.orientation.y,
-      pose.transform.orientation.z,
-      pose.transform.orientation.w
-    )
+    reticle.current.rotation.x=-Math.PI/2
 
     if(!xrState.object) return
 
@@ -235,6 +223,8 @@ function PlacementSystem(){
   )
 }
 
+/* MAIN */
+
 export default function GiftARScene(){
 
   useEffect(()=>{
@@ -250,16 +240,25 @@ export default function GiftARScene(){
   },[])
 
   return(
-    <div style={{
-      width:"100%",
-      height:"65vh",
-      borderRadius:"24px",
-      overflow:"hidden",
-      background:"#000"
-    }}>
-      <Canvas shadows>
+    <div style={{width:"100%",height:"100%"}}>
+      <Canvas
+        shadows
+        gl={{antialias:true,alpha:true}}
+        onCreated={({gl,scene})=>{
+
+          /* CRITICAL FOR AR */
+
+          gl.autoClear=false
+          scene.background=null
+
+          gl.outputColorSpace=THREE.SRGBColorSpace
+          gl.toneMapping=THREE.ACESFilmicToneMapping
+          gl.toneMappingExposure=1
+
+        }}
+      >
         <XR store={store}>
-          <ambientLight intensity={0.6}/>
+          <ambientLight intensity={0.8}/>
           <PlacementSystem/>
         </XR>
       </Canvas>
