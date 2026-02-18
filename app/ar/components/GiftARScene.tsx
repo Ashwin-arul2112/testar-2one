@@ -8,9 +8,13 @@ import * as THREE from "three"
 import { SkeletonUtils } from "three-stdlib"
 import { useRouter } from "next/navigation"
 
+/* XR STORE */
+
 export const store=createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
+
+/* GLOBAL LOCK */
 
 export const xrState={
   placed:false,
@@ -20,7 +24,6 @@ export const xrState={
   object:null as {
     anchor:any
     anchorGroup:THREE.Group
-    pivot:THREE.Group
     mixer?:THREE.AnimationMixer
     actions?:THREE.AnimationAction[]
   }|null
@@ -32,17 +35,28 @@ function PlacementSystem(){
   const router=useRouter()
   const giftGLTF=useGLTF("/models/gift_box.glb")
 
+  const viewerSpace=useRef<XRReferenceSpace|null>(null)
+  const localSpace=useRef<XRReferenceSpace|null>(null)
   const hitSource=useRef<any>(null)
   const lastHit=useRef<any>(null)
   const reticle=useRef<THREE.Mesh>(null!)
+
+  /* PRODUCTION HIT TEST */
 
   useEffect(()=>{
 
     if(!session) return
     const xr=session as XRSession
 
-    xr.requestReferenceSpace("viewer")
-    .then((viewer)=>{
+    Promise.all([
+      xr.requestReferenceSpace("viewer"),
+      xr.requestReferenceSpace("local-floor")
+    ])
+    .then(([viewer,local])=>{
+
+      viewerSpace.current=viewer
+      localSpace.current=local
+
       ;(xr as any)
       .requestHitTestSource({space:viewer})
       .then((src:any)=>{
@@ -51,6 +65,8 @@ function PlacementSystem(){
     })
 
   },[session])
+
+  /* TAP */
 
   useEffect(()=>{
 
@@ -62,30 +78,34 @@ function PlacementSystem(){
       if(!lastHit.current) return
       if(xrState.redirecting) return
 
-      /* SECOND TAP */
+      /* PLAY OPEN */
 
       if(xrState.placed && !xrState.animating){
 
         xrState.animating=true
-
         xrState.object?.actions?.forEach(a=>{
           a.reset()
           a.play()
         })
-
         return
       }
+
+      /* BLOCK MULTIPLE */
 
       if(xrState.placed || xrState.placing) return
       xrState.placing=true
 
+      const hitPose=
+      lastHit.current.getPose(localSpace.current!)
+
+      if(!hitPose) return
+
       ;(lastHit.current as any)
-      .createAnchor()
+      .createAnchor(hitPose.transform)
       .then((anchor:any)=>{
 
-        /* CLONE */
-
-        const cloned=SkeletonUtils.clone(giftGLTF.scene)
+        const cloned=
+        SkeletonUtils.clone(giftGLTF.scene)
 
         /* SCALE */
 
@@ -97,18 +117,19 @@ function PlacementSystem(){
         cloned.scale.setScalar(0.6/max)
         cloned.updateMatrixWorld(true)
 
-        /* XR DRIVEN GROUP */
+        /* LIFT ABOVE FLOOR */
+
+        const liftBox=new THREE.Box3().setFromObject(cloned)
+        const liftSize=new THREE.Vector3()
+        liftBox.getSize(liftSize)
+        cloned.position.y=liftSize.y/2
+
+        /* XR GROUP */
 
         const anchorGroup=new THREE.Group()
+        anchorGroup.add(cloned)
 
-        /* ANIMATION DRIVEN GROUP */
-
-        const pivot=new THREE.Group()
-        pivot.add(cloned)
-
-        anchorGroup.add(pivot)
-
-        /* MIXER ON CLONED ROOT */
+        /* ANIMATION */
 
         let mixer:THREE.AnimationMixer|undefined
         let actions:THREE.AnimationAction[]=[]
@@ -145,7 +166,6 @@ function PlacementSystem(){
         xrState.object={
           anchor,
           anchorGroup,
-          pivot,
           mixer,
           actions
         }
@@ -159,22 +179,23 @@ function PlacementSystem(){
 
   },[session])
 
+  /* FRAME */
+
   useFrame((_,delta,frame)=>{
 
     if(!frame) return
     if(!hitSource.current) return
+    if(!localSpace.current) return
 
-    const refSpace=store.getState().originReferenceSpace
-    if(!refSpace) return
-
-    const hits=frame.getHitTestResults(hitSource.current)
+    const hits=
+    frame.getHitTestResults(hitSource.current)
 
     if(hits.length===0){
       reticle.current.visible=false
       return
     }
 
-    const pose=hits[0].getPose(refSpace)
+    const pose=hits[0].getPose(localSpace.current)
     if(!pose) return
 
     lastHit.current=hits[0]
@@ -185,6 +206,14 @@ function PlacementSystem(){
       pose.transform.position.y,
       pose.transform.position.z
     )
+
+    reticle.current.quaternion.set(
+      pose.transform.orientation.x,
+      pose.transform.orientation.y,
+      pose.transform.orientation.z,
+      pose.transform.orientation.w
+    )
+
     reticle.current.rotation.x=-Math.PI/2
 
     if(!xrState.object) return
@@ -192,7 +221,7 @@ function PlacementSystem(){
     const objPose=
     frame.getPose(
       xrState.object.anchor.anchorSpace,
-      refSpace
+      localSpace.current
     )
 
     if(!objPose) return
@@ -226,6 +255,8 @@ function PlacementSystem(){
     </>
   )
 }
+
+/* MAIN */
 
 export default function GiftARScene(){
 
