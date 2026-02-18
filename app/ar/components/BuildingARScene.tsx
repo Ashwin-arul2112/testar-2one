@@ -29,7 +29,7 @@ function PlacementSystem(){
 
   const { session } = useXR()
   const router = useRouter()
-  const gltf = useGLTF("/models/gift_box.glb")
+  const gltf = useGLTF("/models/building.glb")
 
   const viewerSpace=useRef<XRReferenceSpace|null>(null)
   const localSpace=useRef<XRReferenceSpace|null>(null)
