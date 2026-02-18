@@ -7,17 +7,13 @@ import { useEffect, useRef } from "react"
 import * as THREE from "three"
 import { SkeletonUtils } from "three-stdlib"
 
-/* XR STORE */
-
 export const store=createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
-/* GLOBAL STATE */
-
 export const xrState={
   placed:false,
-  placing:false,   // 🔴 LOCK
+  placing:false,
   object:null as {
     anchor:any
     object:THREE.Group
@@ -31,6 +27,8 @@ function PlacementSystem(){
   const {session}=useXR()
   const buildingGLTF=useGLTF("/models/building.glb")
 
+  const viewerSpace=useRef<XRReferenceSpace|null>(null)
+  const localSpace=useRef<XRReferenceSpace|null>(null)
   const hitSource=useRef<any>(null)
   const lastHit=useRef<any>(null)
   const reticle=useRef<THREE.Mesh>(null!)
@@ -42,15 +40,20 @@ function PlacementSystem(){
     if(!session) return
     const xr=session as XRSession
 
-    xr.requestReferenceSpace("viewer")
-    .then((viewer)=>{
+    Promise.all([
+      xr.requestReferenceSpace("viewer"),
+      xr.requestReferenceSpace("local-floor")
+    ])
+    .then(([viewer,local])=>{
+
+      viewerSpace.current=viewer
+      localSpace.current=local
 
       ;(xr as any)
       .requestHitTestSource({space:viewer})
       .then((src:any)=>{
         hitSource.current=src
       })
-
     })
 
   },[session])
@@ -65,17 +68,18 @@ function PlacementSystem(){
     const onSelect=()=>{
 
       if(!lastHit.current) return
-
-      /* 🚨 BLOCK MULTIPLE */
-
       if(xrState.placed || xrState.placing) return
-
-      /* 🔴 LOCK IMMEDIATELY */
+      if(!localSpace.current) return
 
       xrState.placing=true
 
+      const hitPose=
+      lastHit.current.getPose(localSpace.current)
+
+      if(!hitPose) return
+
       ;(lastHit.current as any)
-      .createAnchor()
+      .createAnchor(hitPose.transform)
       .then((anchor:any)=>{
 
         const model=
@@ -108,10 +112,7 @@ function PlacementSystem(){
 
     if(!frame) return
     if(!hitSource.current) return
-
-    const refSpace=
-    store.getState().originReferenceSpace
-    if(!refSpace) return
+    if(!localSpace.current) return
 
     const hits=
     frame.getHitTestResults(hitSource.current)
@@ -121,23 +122,21 @@ function PlacementSystem(){
       return
     }
 
-    const pose=hits[0].getPose(refSpace)
+    const pose=
+    hits[0].getPose(localSpace.current)
+
     if(!pose) return
 
     lastHit.current=hits[0]
 
-    /* SHOW RETICLE ONLY BEFORE PLACE */
-
     if(!xrState.placed){
 
       reticle.current.visible=true
-
       reticle.current.position.set(
         pose.transform.position.x,
         pose.transform.position.y,
         pose.transform.position.z
       )
-
       reticle.current.rotation.x=-Math.PI/2
 
     }else{
@@ -149,7 +148,7 @@ function PlacementSystem(){
     const objPose=
     frame.getPose(
       xrState.object.anchor.anchorSpace,
-      refSpace
+      localSpace.current
     )
 
     if(!objPose) return
@@ -182,20 +181,15 @@ function PlacementSystem(){
   )
 }
 
-/* MAIN */
-
 export default function BuildingARScene(){
 
   useEffect(()=>{
-
     const start=async()=>{
       if(!navigator.xr) return
       await store.enterAR()
     }
-
     window.addEventListener("start-webxr",start)
     return()=>window.removeEventListener("start-webxr",start)
-
   },[])
 
   return(
@@ -204,14 +198,10 @@ export default function BuildingARScene(){
         shadows
         gl={{antialias:true,alpha:true}}
         onCreated={({gl,scene})=>{
-
           gl.autoClear=false
           scene.background=null
-
           gl.outputColorSpace=THREE.SRGBColorSpace
           gl.toneMapping=THREE.ACESFilmicToneMapping
-          gl.toneMappingExposure=1
-
         }}
       >
         <XR store={store}>
