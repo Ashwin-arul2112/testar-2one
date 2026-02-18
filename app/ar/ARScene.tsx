@@ -95,7 +95,7 @@ function PlacementSystem(){
         const size = new THREE.Vector3()
         box.getSize(size)
         const max = Math.max(size.x,size.y,size.z)
-        model.scale.setScalar(0.12/max)
+        model.scale.setScalar(0.6/max)
 
         /* ANIMATION FIX */
 
