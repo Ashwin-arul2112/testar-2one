@@ -6,6 +6,7 @@ import { useGLTF } from "@react-three/drei"
 import { useEffect, useRef } from "react"
 import * as THREE from "three"
 import { SkeletonUtils } from "three-stdlib"
+import { useRouter } from "next/navigation"
 
 /* XR STORE */
 
@@ -22,16 +23,15 @@ export const xrState={
     object:THREE.Group
     mixer?:THREE.AnimationMixer
     actions?:THREE.AnimationAction[]
-    building?:THREE.Object3D
   }|null
 }
 
 function PlacementSystem(){
 
   const {session}=useXR()
+  const router=useRouter()
 
   const giftGLTF=useGLTF("/models/gift_box.glb")
-  const buildingGLTF=useGLTF("/models/building.glb")
 
   const hitSource=useRef<any>(null)
   const lastHit=useRef<any>(null)
@@ -119,21 +119,24 @@ function PlacementSystem(){
             actions.push(action)
           })
 
-          /* SPAWN BUILDING AFTER ANIMATION FINISH */
+          /* WHEN GIFT OPENS → CLOSE CAMERA + REDIRECT */
 
-          mixer.addEventListener("finished",()=>{
+          mixer.addEventListener("finished",async ()=>{
 
-            if(xrState.object?.building) return
+            if(!session) return
 
-            const building=
-            SkeletonUtils.clone(buildingGLTF.scene)
+            try{
 
-            building.scale.set(0.001,0.001,0.001)
-            building.position.set(0,0.15,0)
+              await (session as XRSession).end()
 
-            pivot.add(building)
+              setTimeout(()=>{
+                router.push("/ar/building")
+              },500)
 
-            xrState.object!.building=building
+            }catch(e){
+              console.warn(e)
+            }
+
           })
         }
 
@@ -216,23 +219,6 @@ function PlacementSystem(){
     if(xrState.object.mixer){
       xrState.object.mixer.update(delta)
     }
-
-    /* BUILDING SCALE + RISE */
-
-    const b=xrState.object.building
-
-    if(b){
-
-      const s=b.scale.x
-
-      if(s<1){
-        const ns=THREE.MathUtils.lerp(s,1,0.08)
-        b.scale.set(ns,ns,ns)
-      }
-
-      b.position.y+=0.002
-    }
-
   })
 
   return(
@@ -249,9 +235,7 @@ function PlacementSystem(){
   )
 }
 
-/* MAIN */
-
-export default function ARScene(){
+export default function GiftARScene(){
 
   useEffect(()=>{
 

@@ -19,10 +19,29 @@ export default function RootLayout({
       }}
     >
       <head>
+
+        {/* REQUIRED FOR WEBXR */}
+
         <meta
           name="viewport"
-          content="width=device-width,initial-scale=1,viewport-fit=cover"
+          content="width=device-width,
+                   initial-scale=1,
+                   maximum-scale=1,
+                   user-scalable=no,
+                   viewport-fit=cover"
         />
+
+        <meta name="mobile-web-app-capable" content="yes"/>
+        <meta name="apple-mobile-web-app-capable" content="yes"/>
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+
+        {/* ALLOW CAMERA */}
+
+        <meta
+          httpEquiv="origin-trial"
+          content=""
+        />
+
       </head>
 
       <body
@@ -32,7 +51,9 @@ export default function RootLayout({
           padding:0,
           width:"100%",
           height:"100%",
+          overflow:"hidden",
           background:"#000",
+          touchAction:"none",
           overscrollBehavior:"none",
           WebkitOverflowScrolling:"touch"
         }}

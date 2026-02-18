@@ -27,7 +27,7 @@ export default function Home(){
       }}
     >
 
-      {/* -------- BACK LIGHT -------- */}
+      {/* BACK LIGHT */}
 
       <div
         style={{
@@ -61,7 +61,7 @@ export default function Home(){
         }}
       />
 
-      {/* -------- TITLE -------- */}
+      {/* TITLE */}
 
       <div style={{zIndex:2}}>
         <h1
@@ -86,7 +86,7 @@ export default function Home(){
         </p>
       </div>
 
-      {/* -------- CENTER GLOW -------- */}
+      {/* CENTER GLOW */}
 
       <div
         style={{
@@ -109,24 +109,24 @@ export default function Home(){
         />
       </div>
 
-      {/* -------- FLOATING CTA -------- */}
+      {/* CTA */}
 
       <div
         style={{
-          position: "absolute",
-          bottom: "50%",
-          left: "45.8%",
-          transform: "translateX(-50%)",
-          width: "100%",
-          display: "flex",
-          justifyContent: "center",
-          zIndex: 5,
-          paddingLeft: 20,
-          paddingRight: 20
+          position:"absolute",
+          bottom:"50%",
+          left:"50%",
+          transform:"translateX(-50%)",
+          width:"100%",
+          display:"flex",
+          justifyContent:"center",
+          zIndex:5,
+          paddingLeft:20,
+          paddingRight:20
         }}
       >
         <button
-          onClick={()=>router.push("/ar")}
+          onClick={()=>router.push("/ar/gift")}
           style={{
             padding:"14px 32px",
             borderRadius:999,
