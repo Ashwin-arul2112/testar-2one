@@ -6,6 +6,7 @@ import { useGLTF } from "@react-three/drei"
 import { useEffect, useRef } from "react"
 import * as THREE from "three"
 import { SkeletonUtils } from "three-stdlib"
+import { useRouter } from "next/navigation"
 
 /* XR STORE */
 
@@ -17,6 +18,8 @@ export const store = createXRStore({
 
 export const xrState={
   placed:false,
+  animating:false,
+  redirecting:false,
   object:null as {
     anchor:any
     object:THREE.Object3D
@@ -30,6 +33,7 @@ export const xrState={
 function PlacementSystem(){
 
   const { session } = useXR()
+  const router = useRouter()
   const gltf = useGLTF("/models/gift_box.glb")
 
   const hitSource = useRef<any>(null)
@@ -66,12 +70,15 @@ function PlacementSystem(){
     const onSelect = ()=>{
 
       if(!lastHit.current) return
+      if(xrState.redirecting) return
 
-      /* SECOND TAP → PLAY ANIMATION */
+      /* SECOND TAP → PLAY */
 
-      if(xrState.placed && xrState.object?.actions){
+      if(xrState.placed && !xrState.animating){
 
-        xrState.object.actions.forEach((a)=>{
+        xrState.animating=true
+
+        xrState.object?.actions?.forEach((a)=>{
           a.reset()
           a.paused=false
           a.play()
@@ -80,24 +87,23 @@ function PlacementSystem(){
         return
       }
 
+      /* BLOCK MULTIPLE PLACE */
+
+      if(xrState.placed) return
+
       /* FIRST TAP → PLACE */
 
       ;(lastHit.current as any)
       .createAnchor()
       .then((anchor:any)=>{
 
-        /* USE THIS INSTEAD OF scene.clone() */
         const model = SkeletonUtils.clone(gltf.scene)
-
-        /* AUTO SCALE */
 
         const box  = new THREE.Box3().setFromObject(model)
         const size = new THREE.Vector3()
         box.getSize(size)
         const max = Math.max(size.x,size.y,size.z)
         model.scale.setScalar(0.6/max)
-
-        /* ANIMATION FIX */
 
         let mixer:THREE.AnimationMixer|undefined
         let actions:THREE.AnimationAction[]=[]
@@ -109,8 +115,7 @@ function PlacementSystem(){
           gltf.animations.forEach((clip)=>{
 
             const action =
-            mixer!
-            .clipAction(
+            mixer!.clipAction(
               THREE.AnimationClip.findByName(
                 gltf.animations,
                 clip.name
@@ -125,6 +130,27 @@ function PlacementSystem(){
             action.paused=true
 
             actions.push(action)
+          })
+
+          /* 🔴 CLOSE AR AFTER OPEN */
+
+          mixer.addEventListener("finished",async ()=>{
+
+            if(xrState.redirecting) return
+            xrState.redirecting=true
+
+            try{
+
+              await (session as XRSession).end()
+
+              setTimeout(()=>{
+                router.push("/ar/building")
+              },500)
+
+            }catch(e){
+              console.warn(e)
+            }
+
           })
         }
 
@@ -168,20 +194,25 @@ function PlacementSystem(){
 
     lastHit.current=hits[0]
 
-    reticle.current.visible=true
+    if(!xrState.placed){
 
-    reticle.current.position.set(
-      pose.transform.position.x,
-      pose.transform.position.y,
-      pose.transform.position.z
-    )
+      reticle.current.visible=true
 
-    reticle.current.quaternion.set(
-      pose.transform.orientation.x,
-      pose.transform.orientation.y,
-      pose.transform.orientation.z,
-      pose.transform.orientation.w
-    )
+      reticle.current.position.set(
+        pose.transform.position.x,
+        pose.transform.position.y,
+        pose.transform.position.z
+      )
+
+      reticle.current.quaternion.set(
+        pose.transform.orientation.x,
+        pose.transform.orientation.y,
+        pose.transform.orientation.z,
+        pose.transform.orientation.w
+      )
+    }else{
+      reticle.current.visible=false
+    }
 
     if(!xrState.object) return
 
@@ -208,11 +239,7 @@ function PlacementSystem(){
       objPose.transform.orientation.w
     )
 
-    /* DELTA TIME UPDATE */
-
-    if(xrState.object.mixer){
-      xrState.object.mixer.update(delta)
-    }
+    xrState.object.mixer?.update(delta)
   })
 
   return(
