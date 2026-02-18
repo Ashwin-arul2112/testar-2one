@@ -10,12 +10,12 @@ import { SkeletonUtils } from "three-stdlib"
 
 /* XR STORE */
 
-export const store = createXRStore({
+export const store=createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"],
   optionalFeatures:["light-estimation"]
 } as any)
 
-/* GLOBAL STATE */
+/* GLOBAL */
 
 export const xrState={
   placed:false,
@@ -27,38 +27,49 @@ export const xrState={
   }|null
 }
 
-/* REAL WORLD SIZE (METERS) */
-
 const REAL_WORLD_SIZE=0.6
 
-/* PLACEMENT SYSTEM */
+/* SYSTEM */
 
 function PlacementSystem(){
 
-  const { session } = useXR()
-  const gltf = useGLTF("/models/gift_box.glb")
+  const {session}=useXR()
+  const gltf=useGLTF("/models/gift_box.glb")
 
-  const hitSource = useRef<any>(null)
-  const lastHit   = useRef<any>(null)
-  const reticle   = useRef<THREE.Mesh>(null!)
+  const hitSource=useRef<any>(null)
+  const viewerSpace=useRef<XRReferenceSpace|null>(null)
+  const localSpace=useRef<XRReferenceSpace|null>(null)
+  const lastHit=useRef<any>(null)
+  const reticle=useRef<THREE.Mesh>(null!)
+
+  /* HIT TEST FIX */
 
   useEffect(()=>{
 
     if(!session) return
     const xr=session as XRSession
 
-    xr.requestReferenceSpace("viewer")
-    .then((viewer)=>{
+    Promise.all([
+      xr.requestReferenceSpace("viewer"),
+      xr.requestReferenceSpace("local-floor")
+    ])
+    .then(([viewer,local])=>{
+
+      viewerSpace.current=viewer
+      localSpace.current=local
 
       ;(xr as any)
-      .requestHitTestSource({space:viewer})
+      .requestHitTestSource({
+        space:viewerSpace.current!
+      })
       .then((src:any)=>{
         hitSource.current=src
       })
-
     })
 
   },[session])
+
+  /* TAP */
 
   useEffect(()=>{
 
@@ -69,28 +80,20 @@ function PlacementSystem(){
 
       if(!lastHit.current) return
 
-      /* REVEAL ANIMATION */
-
       if(xrState.placed && xrState.object?.actions){
-
         xrState.object.actions.forEach(a=>{
           a.stop()
           a.reset()
           a.play()
         })
-
         return
       }
-
-      /* PLACE */
 
       ;(lastHit.current as any)
       .createAnchor()
       .then((anchor:any)=>{
 
         const model=SkeletonUtils.clone(gltf.scene)
-
-        /* AUTO SCALE */
 
         const box=new THREE.Box3().setFromObject(model)
         const size=new THREE.Vector3()
@@ -100,8 +103,6 @@ function PlacementSystem(){
         model.scale.setScalar(REAL_WORLD_SIZE/max)
         model.updateMatrixWorld(true)
 
-        /* SHADOW ENABLE */
-
         model.traverse((o:any)=>{
           if(o.isMesh){
             o.castShadow=true
@@ -109,12 +110,8 @@ function PlacementSystem(){
           }
         })
 
-        /* PIVOT FIX (PREVENT ANIMATION DRIFT) */
-
         const pivot=new THREE.Group()
         pivot.add(model)
-
-        /* ANIMATION */
 
         let mixer:THREE.AnimationMixer|undefined
         let actions:THREE.AnimationAction[]=[]
@@ -126,8 +123,7 @@ function PlacementSystem(){
           gltf.animations.forEach((clip)=>{
 
             const action=
-            mixer!
-            .clipAction(clip,pivot)
+            mixer!.clipAction(clip,pivot)
 
             action.setLoop(THREE.LoopOnce,1)
             action.clampWhenFinished=true
@@ -137,13 +133,7 @@ function PlacementSystem(){
           })
         }
 
-        xrState.object={
-          anchor,
-          pivot,
-          mixer,
-          actions
-        }
-
+        xrState.object={anchor,pivot,mixer,actions}
         xrState.placed=true
       })
     }
@@ -153,13 +143,13 @@ function PlacementSystem(){
 
   },[session])
 
+  /* FRAME */
+
   useFrame((_,delta,frame)=>{
 
     if(!frame) return
     if(!hitSource.current) return
-
-    const refSpace=store.getState().originReferenceSpace
-    if(!refSpace) return
+    if(!localSpace.current) return
 
     const hits=frame.getHitTestResults(hitSource.current)
 
@@ -168,7 +158,7 @@ function PlacementSystem(){
       return
     }
 
-    const pose=hits[0].getPose(refSpace)
+    const pose=hits[0].getPose(localSpace.current)
     if(!pose) return
 
     lastHit.current=hits[0]
@@ -188,12 +178,14 @@ function PlacementSystem(){
       pose.transform.orientation.w
     )
 
+    reticle.current.rotation.x=-Math.PI/2
+
     if(!xrState.object) return
 
     const objPose=
     frame.getPose(
       xrState.object.anchor.anchorSpace,
-      refSpace
+      localSpace.current
     )
 
     if(!objPose) return
@@ -222,8 +214,6 @@ function PlacementSystem(){
         <ringGeometry args={[0.05,0.07,32]}/>
         <meshBasicMaterial color="white"/>
       </mesh>
-
-      {/* CONTACT SHADOW */}
 
       <mesh rotation={[-Math.PI/2,0,0]} receiveShadow position={[0,-0.001,0]}>
         <planeGeometry args={[5,5]}/>
@@ -263,30 +253,20 @@ export default function ARScene(){
     }}>
       <Canvas
         shadows
-        gl={{
-          antialias:true,
-          alpha:true
-        }}
+        gl={{antialias:true,alpha:true}}
         onCreated={({gl})=>{
-
-          gl.outputColorSpace = THREE.SRGBColorSpace
-          gl.toneMapping = THREE.ACESFilmicToneMapping
-          gl.toneMappingExposure = 1
-
+          gl.outputColorSpace=THREE.SRGBColorSpace
+          gl.toneMapping=THREE.ACESFilmicToneMapping
+          gl.toneMappingExposure=1
         }}
       >
-
         <XR store={store}>
-
-          <ambientLight intensity={0.5}/>
+          <ambientLight intensity={0.9}/>
           <Environment preset="apartment"/>
-
           <PlacementSystem/>
-
           <EffectComposer>
             <Noise opacity={0.025}/>
           </EffectComposer>
-
         </XR>
       </Canvas>
     </div>
