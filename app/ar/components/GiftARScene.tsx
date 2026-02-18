@@ -14,23 +14,15 @@ export const store=createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
-/* 🚨 SESSION SAFE GLOBAL STATE */
+/* SESSION LOCK STATE */
 
-export const xrState={
-  placed:false,
+const sessionState={
+  hitSource:null as XRHitTestSource|null,
+  listenerAdded:false,
   placing:false,
+  placed:false,
   animating:false,
-  redirecting:false,
-
-  hitSourceCreated:false,
-  selectListenerAdded:false,
-
-  object:null as {
-    anchor:any
-    anchorGroup:THREE.Group
-    mixer?:THREE.AnimationMixer
-    actions?:THREE.AnimationAction[]
-  }|null
+  redirecting:false
 }
 
 function PlacementSystem(){
@@ -39,20 +31,28 @@ function PlacementSystem(){
   const router=useRouter()
   const giftGLTF=useGLTF("/models/gift_box.glb")
 
-  const viewerSpace=useRef<XRReferenceSpace|null>(null)
   const localSpace=useRef<XRReferenceSpace|null>(null)
-  const hitSource=useRef<any>(null)
   const lastHit=useRef<any>(null)
   const reticle=useRef<THREE.Mesh>(null!)
 
-  /* 🛑 HIT TEST RUN ONLY ONCE */
+  const anchorGroup=useRef<THREE.Group|null>(null)
+  const mixer=useRef<THREE.AnimationMixer|null>(null)
+  const actions=useRef<THREE.AnimationAction[]>([])
+
+  /* RUN ONLY WHEN XR SESSION CHANGES */
 
   useEffect(()=>{
 
     if(!session) return
-    if(xrState.hitSourceCreated) return
 
-    xrState.hitSourceCreated=true
+    /* RESET ON NEW SESSION */
+
+    sessionState.hitSource=null
+    sessionState.listenerAdded=false
+    sessionState.placing=false
+    sessionState.placed=false
+    sessionState.animating=false
+    sessionState.redirecting=false
 
     const xr=session as XRSession
 
@@ -62,52 +62,36 @@ function PlacementSystem(){
     ])
     .then(([viewer,local])=>{
 
-      viewerSpace.current=viewer
       localSpace.current=local
 
       ;(xr as any)
       .requestHitTestSource({space:viewer})
       .then((src:any)=>{
-        hitSource.current=src
+        sessionState.hitSource=src
       })
     })
 
-  },[session])
-
-  /* 🛑 SELECT LISTENER ONLY ONCE */
-
-  useEffect(()=>{
-
-    if(!session) return
-    if(xrState.selectListenerAdded) return
-
-    xrState.selectListenerAdded=true
-
-    const xr=session as XRSession
+    if(sessionState.listenerAdded) return
+    sessionState.listenerAdded=true
 
     const onSelect=()=>{
 
       if(!lastHit.current) return
-      if(xrState.redirecting) return
+      if(sessionState.redirecting) return
 
       /* SECOND TAP → PLAY */
 
-      if(xrState.placed && !xrState.animating){
+      if(sessionState.placed && !sessionState.animating){
 
-        xrState.animating=true
-
-        xrState.object?.actions?.forEach(a=>{
-          a.reset()
-          a.play()
-        })
-
+        sessionState.animating=true
+        actions.current.forEach(a=>a.reset().play())
         return
       }
 
-      /* BLOCK MULTIPLE PLACE */
+      /* BLOCK MULTI PLACE */
 
-      if(xrState.placed || xrState.placing) return
-      xrState.placing=true
+      if(sessionState.placed || sessionState.placing) return
+      sessionState.placing=true
 
       const hitPose=
       lastHit.current.getPose(localSpace.current!)
@@ -127,89 +111,62 @@ function PlacementSystem(){
         const max=Math.max(size.x,size.y,size.z)
 
         model.scale.setScalar(0.6/max)
-        model.updateMatrixWorld(true)
-
-        const pivot=new THREE.Group()
-        pivot.add(model)
 
         const liftBox=new THREE.Box3().setFromObject(model)
         const liftSize=new THREE.Vector3()
         liftBox.getSize(liftSize)
         model.position.y=liftSize.y/2
 
-        const anchorGroup=new THREE.Group()
-        anchorGroup.add(pivot)
+        const pivot=new THREE.Group()
+        pivot.add(model)
 
-        let mixer:THREE.AnimationMixer|undefined
-        let actions:THREE.AnimationAction[]=[]
+        anchorGroup.current=new THREE.Group()
+        anchorGroup.current.add(pivot)
 
-        if(giftGLTF.animations.length){
+        mixer.current=new THREE.AnimationMixer(pivot)
 
-          mixer=new THREE.AnimationMixer(pivot)
+        giftGLTF.animations.forEach((clip)=>{
 
-          giftGLTF.animations.forEach((clip)=>{
+          const action=mixer.current!.clipAction(clip)
+          action.setLoop(THREE.LoopOnce,1)
+          action.clampWhenFinished=true
+          action.paused=true
 
-            const action=mixer!.clipAction(clip)
+          actions.current.push(action)
+        })
 
-            action.setLoop(THREE.LoopOnce,1)
-            action.clampWhenFinished=true
-            action.paused=true
+        mixer.current.addEventListener("finished",async ()=>{
 
-            actions.push(action)
-          })
+          if(sessionState.redirecting) return
+          sessionState.redirecting=true
 
-          mixer.addEventListener("finished",async ()=>{
+          await xr.end()
 
-            if(xrState.redirecting) return
-            xrState.redirecting=true
+          setTimeout(()=>{
+            router.push("/ar/building")
+          },500)
+        })
 
-            try{
-
-              await (session as XRSession).end()
-
-              /* 🔄 RESET SESSION STATE */
-
-              xrState.hitSourceCreated=false
-              xrState.selectListenerAdded=false
-              xrState.placed=false
-              xrState.placing=false
-              xrState.animating=false
-              xrState.object=null
-
-              setTimeout(()=>{
-                router.push("/ar/building")
-              },500)
-
-            }catch{}
-          })
-        }
-
-        xrState.object={
-          anchor,
-          anchorGroup,
-          mixer,
-          actions
-        }
-
-        xrState.placed=true
+        sessionState.placed=true
       })
     }
 
     xr.addEventListener("select",onSelect)
-    return()=>xr.removeEventListener("select",onSelect)
+
+    return()=>{
+      xr.removeEventListener("select",onSelect)
+    }
 
   },[session])
-
-  /* FRAME */
 
   useFrame((_,delta,frame)=>{
 
     if(!frame) return
-    if(!hitSource.current) return
+    if(!sessionState.hitSource) return
     if(!localSpace.current) return
 
     const hits=
-    frame.getHitTestResults(hitSource.current)
+    frame.getHitTestResults(sessionState.hitSource)
 
     if(hits.length===0){
       reticle.current.visible=false
@@ -229,30 +186,30 @@ function PlacementSystem(){
     )
     reticle.current.rotation.x=-Math.PI/2
 
-    if(!xrState.object) return
+    if(!anchorGroup.current) return
 
     const objPose=
     frame.getPose(
-      xrState.object.anchor.anchorSpace,
+      (lastHit.current as any).anchorSpace,
       localSpace.current
     )
 
     if(!objPose) return
 
-    xrState.object.anchorGroup.position.set(
+    anchorGroup.current.position.set(
       objPose.transform.position.x,
       objPose.transform.position.y,
       objPose.transform.position.z
     )
 
-    xrState.object.anchorGroup.quaternion.set(
+    anchorGroup.current.quaternion.set(
       objPose.transform.orientation.x,
       objPose.transform.orientation.y,
       objPose.transform.orientation.z,
       objPose.transform.orientation.w
     )
 
-    xrState.object.mixer?.update(delta)
+    mixer.current?.update(delta)
   })
 
   return(
@@ -262,8 +219,8 @@ function PlacementSystem(){
         <meshBasicMaterial color="white"/>
       </mesh>
 
-      {xrState.object && (
-        <primitive object={xrState.object.anchorGroup}/>
+      {anchorGroup.current && (
+        <primitive object={anchorGroup.current}/>
       )}
     </>
   )
@@ -274,17 +231,14 @@ export default function GiftARScene(){
   return(
     <div style={{width:"100%",height:"100%"}}>
       <Canvas
-        shadows
         gl={{antialias:true,alpha:true}}
         onCreated={({gl,scene})=>{
           gl.autoClear=false
           scene.background=null
-          gl.outputColorSpace=THREE.SRGBColorSpace
-          gl.toneMapping=THREE.ACESFilmicToneMapping
         }}
       >
         <XR store={store}>
-          <ambientLight intensity={0.8}/>
+          <ambientLight intensity={1}/>
           <PlacementSystem/>
         </XR>
       </Canvas>
