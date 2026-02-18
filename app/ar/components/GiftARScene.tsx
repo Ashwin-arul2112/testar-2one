@@ -14,12 +14,13 @@ export const store=createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
-/* GLOBAL LOCKED STATE */
+/* HARD LOCKED GLOBAL STATE */
 
 export const xrState={
   placed:false,
-  isAnimating:false,
-  isRedirecting:false,
+  placing:false,       // 👈 IMPORTANT
+  animating:false,
+  redirecting:false,
   object:null as {
     anchor:any
     object:THREE.Group
@@ -56,7 +57,7 @@ function PlacementSystem(){
 
   },[session])
 
-  /* TAP HANDLER */
+  /* TAP */
 
   useEffect(()=>{
 
@@ -67,15 +68,15 @@ function PlacementSystem(){
 
       if(!lastHit.current) return
 
-      /* BLOCK AFTER REDIRECT */
+      /* ALREADY NAVIGATING */
 
-      if(xrState.isRedirecting) return
+      if(xrState.redirecting) return
 
       /* SECOND TAP → PLAY */
 
-      if(xrState.placed && !xrState.isAnimating){
+      if(xrState.placed && !xrState.animating){
 
-        xrState.isAnimating=true
+        xrState.animating=true
 
         xrState.object?.actions?.forEach(a=>{
           a.stop()
@@ -86,9 +87,13 @@ function PlacementSystem(){
         return
       }
 
-      /* BLOCK ANYTHING AFTER FIRST PLACE */
+      /* BLOCK MULTI-TAP SPAM */
 
-      if(xrState.placed) return
+      if(xrState.placed || xrState.placing) return
+
+      /* LOCK IMMEDIATELY */
+
+      xrState.placing=true
 
       /* FIRST TAP → PLACE */
 
@@ -131,8 +136,8 @@ function PlacementSystem(){
 
           mixer.addEventListener("finished",async ()=>{
 
-            if(xrState.isRedirecting) return
-            xrState.isRedirecting=true
+            if(xrState.redirecting) return
+            xrState.redirecting=true
 
             if(!session) return
 
@@ -161,7 +166,7 @@ function PlacementSystem(){
 
   },[session])
 
-  /* FRAME LOOP */
+  /* FRAME */
 
   useFrame((_,delta,frame)=>{
 
