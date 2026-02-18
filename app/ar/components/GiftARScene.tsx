@@ -14,7 +14,7 @@ export const store=createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
-/* GLOBAL LOCK */
+/* GLOBAL HARD LOCK */
 
 export const xrState={
   placed:false,
@@ -41,7 +41,7 @@ function PlacementSystem(){
   const lastHit=useRef<any>(null)
   const reticle=useRef<THREE.Mesh>(null!)
 
-  /* PRODUCTION HIT TEST */
+  /* HIT TEST */
 
   useEffect(()=>{
 
@@ -78,7 +78,7 @@ function PlacementSystem(){
       if(!lastHit.current) return
       if(xrState.redirecting) return
 
-      /* PLAY OPEN */
+      /* SECOND TAP → PLAY */
 
       if(xrState.placed && !xrState.animating){
 
@@ -90,7 +90,7 @@ function PlacementSystem(){
         return
       }
 
-      /* BLOCK MULTIPLE */
+      /* BLOCK MULTI PLACE */
 
       if(xrState.placed || xrState.placing) return
       xrState.placing=true
@@ -104,30 +104,37 @@ function PlacementSystem(){
       .createAnchor(hitPose.transform)
       .then((anchor:any)=>{
 
-        const cloned=
+        /* CLONE */
+
+        const model=
         SkeletonUtils.clone(giftGLTF.scene)
 
         /* SCALE */
 
-        const box=new THREE.Box3().setFromObject(cloned)
+        const box=new THREE.Box3().setFromObject(model)
         const size=new THREE.Vector3()
         box.getSize(size)
         const max=Math.max(size.x,size.y,size.z)
 
-        cloned.scale.setScalar(0.6/max)
-        cloned.updateMatrixWorld(true)
+        model.scale.setScalar(0.6/max)
+        model.updateMatrixWorld(true)
 
-        /* LIFT ABOVE FLOOR */
+        /* PIVOT */
 
-        const liftBox=new THREE.Box3().setFromObject(cloned)
+        const pivot=new THREE.Group()
+        pivot.add(model)
+
+        /* LIFT MODEL */
+
+        const liftBox=new THREE.Box3().setFromObject(model)
         const liftSize=new THREE.Vector3()
         liftBox.getSize(liftSize)
-        cloned.position.y=liftSize.y/2
+        model.position.y=liftSize.y/2
 
-        /* XR GROUP */
+        /* ANCHOR GROUP */
 
         const anchorGroup=new THREE.Group()
-        anchorGroup.add(cloned)
+        anchorGroup.add(pivot)
 
         /* ANIMATION */
 
@@ -136,7 +143,7 @@ function PlacementSystem(){
 
         if(giftGLTF.animations.length){
 
-          mixer=new THREE.AnimationMixer(cloned)
+          mixer=new THREE.AnimationMixer(pivot)
 
           giftGLTF.animations.forEach((clip)=>{
 
@@ -159,7 +166,7 @@ function PlacementSystem(){
               setTimeout(()=>{
                 router.push("/ar/building")
               },500)
-            }catch(e){}
+            }catch{}
           })
         }
 
