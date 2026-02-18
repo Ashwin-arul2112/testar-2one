@@ -26,7 +26,7 @@ export const xrState={
 function PlacementSystem(){
 
   const { session } = useXR()
-  const { scene } = useGLTF("/models/wand.glb")
+  const { scene } = useGLTF("/models/1.glb")
 
   const hitSource = useRef<any>(null)
   const lastHit   = useRef<any>(null)
