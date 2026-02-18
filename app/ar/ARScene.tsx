@@ -5,14 +5,15 @@ import { XR, createXRStore, useXR } from "@react-three/xr"
 import { useGLTF } from "@react-three/drei"
 import { useEffect, useRef } from "react"
 import * as THREE from "three"
+import { SkeletonUtils } from "three-stdlib"
 
-/* ---------------- XR STORE ---------------- */
+/* XR STORE */
 
 export const store = createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
-/* ---------------- GLOBAL XR STATE ---------------- */
+/* GLOBAL STATE */
 
 export const xrState={
   placed:false,
@@ -24,20 +25,18 @@ export const xrState={
   }|null
 }
 
-/* ---------------- PLACEMENT SYSTEM ---------------- */
+/* PLACEMENT SYSTEM */
 
 function PlacementSystem(){
 
   const { session } = useXR()
-
-  /* CHANGE MODEL PATH HERE */
   const gltf = useGLTF("/models/gift_box.glb")
 
   const hitSource = useRef<any>(null)
   const lastHit   = useRef<any>(null)
   const reticle   = useRef<THREE.Mesh>(null!)
 
-  /* ---------- HIT TEST ---------- */
+  /* HIT TEST */
 
   useEffect(()=>{
 
@@ -57,7 +56,7 @@ function PlacementSystem(){
 
   },[session])
 
-  /* ---------- TAP ---------- */
+  /* TAP */
 
   useEffect(()=>{
 
@@ -87,7 +86,8 @@ function PlacementSystem(){
       .createAnchor()
       .then((anchor:any)=>{
 
-        const model = gltf.scene.clone(true)
+        /* USE THIS INSTEAD OF scene.clone() */
+        const model = SkeletonUtils.clone(gltf.scene)
 
         /* AUTO SCALE */
 
@@ -97,7 +97,7 @@ function PlacementSystem(){
         const max = Math.max(size.x,size.y,size.z)
         model.scale.setScalar(0.12/max)
 
-        /* ---------- ANIMATION ---------- */
+        /* ANIMATION FIX */
 
         let mixer:THREE.AnimationMixer|undefined
         let actions:THREE.AnimationAction[]=[]
@@ -106,17 +106,25 @@ function PlacementSystem(){
 
           mixer = new THREE.AnimationMixer(model)
 
-          actions = gltf.animations.map((clip)=>{
+          gltf.animations.forEach((clip)=>{
 
             const action =
             mixer!
-            .clipAction(clip)
+            .clipAction(
+              THREE.AnimationClip.findByName(
+                gltf.animations,
+                clip.name
+              )!,
+              model
+            )
 
+            action.reset()
             action.setLoop(THREE.LoopOnce,1)
             action.clampWhenFinished=true
-            action.paused=true   // wait for tap
+            action.enabled=true
+            action.paused=true
 
-            return action
+            actions.push(action)
           })
         }
 
@@ -136,7 +144,7 @@ function PlacementSystem(){
 
   },[session])
 
-  /* ---------- FRAME LOOP ---------- */
+  /* FRAME LOOP */
 
   useFrame((_,delta,frame)=>{
 
@@ -200,7 +208,7 @@ function PlacementSystem(){
       objPose.transform.orientation.w
     )
 
-    /* ANIMATION UPDATE */
+    /* DELTA TIME UPDATE */
 
     if(xrState.object.mixer){
       xrState.object.mixer.update(delta)
@@ -221,7 +229,7 @@ function PlacementSystem(){
   )
 }
 
-/* ---------------- MAIN ---------------- */
+/* MAIN */
 
 export default function ARScene(){
 
@@ -238,16 +246,14 @@ export default function ARScene(){
   },[])
 
   return(
-    <div
-      style={{
-        width:"100%",
-        height:"65vh",
-        borderRadius:"24px",
-        overflow:"hidden",
-        background:"#000",
-        position:"relative"
-      }}
-    >
+    <div style={{
+      width:"100%",
+      height:"65vh",
+      borderRadius:"24px",
+      overflow:"hidden",
+      background:"#000",
+      position:"relative"
+    }}>
       <Canvas shadows>
         <XR store={store}>
           <ambientLight intensity={0.6}/>
