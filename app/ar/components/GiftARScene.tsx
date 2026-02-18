@@ -14,13 +14,17 @@ export const store=createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
-/* GLOBAL HARD LOCK */
+/* 🚨 SESSION SAFE GLOBAL STATE */
 
 export const xrState={
   placed:false,
   placing:false,
   animating:false,
   redirecting:false,
+
+  hitSourceCreated:false,
+  selectListenerAdded:false,
+
   object:null as {
     anchor:any
     anchorGroup:THREE.Group
@@ -41,11 +45,15 @@ function PlacementSystem(){
   const lastHit=useRef<any>(null)
   const reticle=useRef<THREE.Mesh>(null!)
 
-  /* HIT TEST */
+  /* 🛑 HIT TEST RUN ONLY ONCE */
 
   useEffect(()=>{
 
     if(!session) return
+    if(xrState.hitSourceCreated) return
+
+    xrState.hitSourceCreated=true
+
     const xr=session as XRSession
 
     Promise.all([
@@ -66,11 +74,15 @@ function PlacementSystem(){
 
   },[session])
 
-  /* TAP */
+  /* 🛑 SELECT LISTENER ONLY ONCE */
 
   useEffect(()=>{
 
     if(!session) return
+    if(xrState.selectListenerAdded) return
+
+    xrState.selectListenerAdded=true
+
     const xr=session as XRSession
 
     const onSelect=()=>{
@@ -83,14 +95,16 @@ function PlacementSystem(){
       if(xrState.placed && !xrState.animating){
 
         xrState.animating=true
+
         xrState.object?.actions?.forEach(a=>{
           a.reset()
           a.play()
         })
+
         return
       }
 
-      /* BLOCK MULTI PLACE */
+      /* BLOCK MULTIPLE PLACE */
 
       if(xrState.placed || xrState.placing) return
       xrState.placing=true
@@ -104,12 +118,8 @@ function PlacementSystem(){
       .createAnchor(hitPose.transform)
       .then((anchor:any)=>{
 
-        /* CLONE */
-
         const model=
         SkeletonUtils.clone(giftGLTF.scene)
-
-        /* SCALE */
 
         const box=new THREE.Box3().setFromObject(model)
         const size=new THREE.Vector3()
@@ -119,24 +129,16 @@ function PlacementSystem(){
         model.scale.setScalar(0.6/max)
         model.updateMatrixWorld(true)
 
-        /* PIVOT */
-
         const pivot=new THREE.Group()
         pivot.add(model)
-
-        /* LIFT MODEL */
 
         const liftBox=new THREE.Box3().setFromObject(model)
         const liftSize=new THREE.Vector3()
         liftBox.getSize(liftSize)
         model.position.y=liftSize.y/2
 
-        /* ANCHOR GROUP */
-
         const anchorGroup=new THREE.Group()
         anchorGroup.add(pivot)
-
-        /* ANIMATION */
 
         let mixer:THREE.AnimationMixer|undefined
         let actions:THREE.AnimationAction[]=[]
@@ -162,10 +164,22 @@ function PlacementSystem(){
             xrState.redirecting=true
 
             try{
+
               await (session as XRSession).end()
+
+              /* 🔄 RESET SESSION STATE */
+
+              xrState.hitSourceCreated=false
+              xrState.selectListenerAdded=false
+              xrState.placed=false
+              xrState.placing=false
+              xrState.animating=false
+              xrState.object=null
+
               setTimeout(()=>{
                 router.push("/ar/building")
               },500)
+
             }catch{}
           })
         }
@@ -213,14 +227,6 @@ function PlacementSystem(){
       pose.transform.position.y,
       pose.transform.position.z
     )
-
-    reticle.current.quaternion.set(
-      pose.transform.orientation.x,
-      pose.transform.orientation.y,
-      pose.transform.orientation.z,
-      pose.transform.orientation.w
-    )
-
     reticle.current.rotation.x=-Math.PI/2
 
     if(!xrState.object) return
@@ -262,8 +268,6 @@ function PlacementSystem(){
     </>
   )
 }
-
-/* MAIN */
 
 export default function GiftARScene(){
 
