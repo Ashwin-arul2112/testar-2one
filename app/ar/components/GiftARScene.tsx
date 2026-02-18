@@ -8,17 +8,13 @@ import * as THREE from "three"
 import { SkeletonUtils } from "three-stdlib"
 import { useRouter } from "next/navigation"
 
-/* XR STORE */
-
 export const store=createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
-/* HARD LOCKED GLOBAL STATE */
-
 export const xrState={
   placed:false,
-  placing:false,       // 👈 IMPORTANT
+  placing:false,
   animating:false,
   redirecting:false,
   object:null as {
@@ -39,8 +35,6 @@ function PlacementSystem(){
   const lastHit=useRef<any>(null)
   const reticle=useRef<THREE.Mesh>(null!)
 
-  /* HIT TEST */
-
   useEffect(()=>{
 
     if(!session) return
@@ -57,8 +51,6 @@ function PlacementSystem(){
 
   },[session])
 
-  /* TAP */
-
   useEffect(()=>{
 
     if(!session) return
@@ -67,9 +59,6 @@ function PlacementSystem(){
     const onSelect=()=>{
 
       if(!lastHit.current) return
-
-      /* ALREADY NAVIGATING */
-
       if(xrState.redirecting) return
 
       /* SECOND TAP → PLAY */
@@ -87,43 +76,43 @@ function PlacementSystem(){
         return
       }
 
-      /* BLOCK MULTI-TAP SPAM */
+      /* BLOCK MULTI SELECT */
 
       if(xrState.placed || xrState.placing) return
-
-      /* LOCK IMMEDIATELY */
-
       xrState.placing=true
 
-      /* FIRST TAP → PLACE */
+      /* PLACE */
 
       ;(lastHit.current as any)
       .createAnchor()
       .then((anchor:any)=>{
 
-        const model=SkeletonUtils.clone(giftGLTF.scene)
+        /* CLONE ROOT */
 
-        const box=new THREE.Box3().setFromObject(model)
+        const cloned=SkeletonUtils.clone(giftGLTF.scene)
+
+        /* SCALE */
+
+        const box=new THREE.Box3().setFromObject(cloned)
         const size=new THREE.Vector3()
         box.getSize(size)
         const max=Math.max(size.x,size.y,size.z)
 
-        model.scale.setScalar(0.6/max)
-        model.updateMatrixWorld(true)
+        cloned.scale.setScalar(0.6/max)
+        cloned.updateMatrixWorld(true)
 
-        const pivot=new THREE.Group()
-        pivot.add(model)
+        /* 🔴 MIXER MUST BIND TO CLONED ROOT */
 
         let mixer:THREE.AnimationMixer|undefined
         let actions:THREE.AnimationAction[]=[]
 
         if(giftGLTF.animations.length){
 
-          mixer=new THREE.AnimationMixer(pivot)
+          mixer=new THREE.AnimationMixer(cloned)
 
           giftGLTF.animations.forEach((clip)=>{
 
-            const action=mixer!.clipAction(clip,pivot)
+            const action=mixer!.clipAction(clip)
 
             action.setLoop(THREE.LoopOnce,1)
             action.clampWhenFinished=true
@@ -131,8 +120,6 @@ function PlacementSystem(){
 
             actions.push(action)
           })
-
-          /* AFTER OPEN */
 
           mixer.addEventListener("finished",async ()=>{
 
@@ -142,19 +129,21 @@ function PlacementSystem(){
             if(!session) return
 
             try{
-
               await (session as XRSession).end()
-
               setTimeout(()=>{
                 router.push("/ar/building")
               },500)
-
             }catch(e){
               console.warn(e)
             }
 
           })
         }
+
+        /* NOW WRAP */
+
+        const pivot=new THREE.Group()
+        pivot.add(cloned)
 
         xrState.object={anchor,object:pivot,mixer,actions}
         xrState.placed=true
@@ -165,8 +154,6 @@ function PlacementSystem(){
     return()=>xr.removeEventListener("select",onSelect)
 
   },[session])
-
-  /* FRAME */
 
   useFrame((_,delta,frame)=>{
 
@@ -238,8 +225,6 @@ function PlacementSystem(){
   )
 }
 
-/* MAIN */
-
 export default function GiftARScene(){
 
   return(
@@ -248,14 +233,11 @@ export default function GiftARScene(){
         shadows
         gl={{antialias:true,alpha:true}}
         onCreated={({gl,scene})=>{
-
           gl.autoClear=false
           scene.background=null
-
           gl.outputColorSpace=THREE.SRGBColorSpace
           gl.toneMapping=THREE.ACESFilmicToneMapping
           gl.toneMappingExposure=1
-
         }}
       >
         <XR store={store}>
