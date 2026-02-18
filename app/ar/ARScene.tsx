@@ -9,7 +9,7 @@ import { SkeletonUtils } from "three-stdlib"
 
 /* XR STORE */
 
-export const store = createXRStore({
+export const store=createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
@@ -19,37 +19,38 @@ export const xrState={
   placed:false,
   object:null as {
     anchor:any
-    object:THREE.Object3D
+    object:THREE.Group
     mixer?:THREE.AnimationMixer
     actions?:THREE.AnimationAction[]
+    building?:THREE.Object3D
   }|null
 }
 
-/* PLACEMENT SYSTEM */
-
 function PlacementSystem(){
 
-  const { session } = useXR()
-  const gltf = useGLTF("/models/gift_box.glb")
+  const {session}=useXR()
 
-  const hitSource = useRef<any>(null)
-  const lastHit   = useRef<any>(null)
-  const reticle   = useRef<THREE.Mesh>(null!)
+  const giftGLTF=useGLTF("/models/gift_box.glb")
+  const buildingGLTF=useGLTF("/models/building.glb")
+
+  const hitSource=useRef<any>(null)
+  const lastHit=useRef<any>(null)
+  const reticle=useRef<THREE.Mesh>(null!)
 
   /* HIT TEST */
 
   useEffect(()=>{
 
     if(!session) return
-    const xr = session as XRSession
+    const xr=session as XRSession
 
     xr.requestReferenceSpace("viewer")
-    .then((viewer:XRReferenceSpace)=>{
+    .then((viewer)=>{
 
       ;(xr as any)
       .requestHitTestSource({space:viewer})
       .then((src:any)=>{
-        hitSource.current = src
+        hitSource.current=src
       })
 
     })
@@ -61,76 +62,84 @@ function PlacementSystem(){
   useEffect(()=>{
 
     if(!session) return
-    const xr = session as XRSession
+    const xr=session as XRSession
 
-    const onSelect = ()=>{
+    const onSelect=()=>{
 
       if(!lastHit.current) return
 
-      /* SECOND TAP → PLAY ANIMATION */
+      /* PLAY OPEN ANIMATION */
 
       if(xrState.placed && xrState.object?.actions){
 
-        xrState.object.actions.forEach((a)=>{
+        xrState.object.actions.forEach(a=>{
+          a.stop()
           a.reset()
-          a.paused=false
           a.play()
         })
 
         return
       }
 
-      /* FIRST TAP → PLACE */
+      /* PLACE GIFT */
 
       ;(lastHit.current as any)
       .createAnchor()
       .then((anchor:any)=>{
 
-        /* USE THIS INSTEAD OF scene.clone() */
-        const model = SkeletonUtils.clone(gltf.scene)
+        const model=SkeletonUtils.clone(giftGLTF.scene)
 
-        /* AUTO SCALE */
-
-        const box  = new THREE.Box3().setFromObject(model)
-        const size = new THREE.Vector3()
+        const box=new THREE.Box3().setFromObject(model)
+        const size=new THREE.Vector3()
         box.getSize(size)
-        const max = Math.max(size.x,size.y,size.z)
-        model.scale.setScalar(0.6/max)
+        const max=Math.max(size.x,size.y,size.z)
 
-        /* ANIMATION FIX */
+        model.scale.setScalar(0.6/max)
+        model.updateMatrixWorld(true)
+
+        const pivot=new THREE.Group()
+        pivot.add(model)
 
         let mixer:THREE.AnimationMixer|undefined
         let actions:THREE.AnimationAction[]=[]
 
-        if(gltf.animations.length){
+        if(giftGLTF.animations.length){
 
-          mixer = new THREE.AnimationMixer(model)
+          mixer=new THREE.AnimationMixer(pivot)
 
-          gltf.animations.forEach((clip)=>{
+          giftGLTF.animations.forEach((clip)=>{
 
-            const action =
-            mixer!
-            .clipAction(
-              THREE.AnimationClip.findByName(
-                gltf.animations,
-                clip.name
-              )!,
-              model
-            )
+            const action=
+            mixer!.clipAction(clip,pivot)
 
-            action.reset()
             action.setLoop(THREE.LoopOnce,1)
             action.clampWhenFinished=true
-            action.enabled=true
             action.paused=true
 
             actions.push(action)
+          })
+
+          /* SPAWN BUILDING AFTER ANIMATION FINISH */
+
+          mixer.addEventListener("finished",()=>{
+
+            if(xrState.object?.building) return
+
+            const building=
+            SkeletonUtils.clone(buildingGLTF.scene)
+
+            building.scale.set(0.001,0.001,0.001)
+            building.position.set(0,0.15,0)
+
+            pivot.add(building)
+
+            xrState.object!.building=building
           })
         }
 
         xrState.object={
           anchor,
-          object:model,
+          object:pivot,
           mixer,
           actions
         }
@@ -144,19 +153,17 @@ function PlacementSystem(){
 
   },[session])
 
-  /* FRAME LOOP */
+  /* FRAME */
 
   useFrame((_,delta,frame)=>{
 
     if(!frame) return
     if(!hitSource.current) return
 
-    const refSpace=
-    store.getState().originReferenceSpace
+    const refSpace=store.getState().originReferenceSpace
     if(!refSpace) return
 
-    const hits=
-    frame.getHitTestResults(hitSource.current)
+    const hits=frame.getHitTestResults(hitSource.current)
 
     if(hits.length===0){
       reticle.current.visible=false
@@ -193,8 +200,6 @@ function PlacementSystem(){
 
     if(!objPose) return
 
-    xrState.object.object.visible=true
-
     xrState.object.object.position.set(
       objPose.transform.position.x,
       objPose.transform.position.y,
@@ -208,17 +213,32 @@ function PlacementSystem(){
       objPose.transform.orientation.w
     )
 
-    /* DELTA TIME UPDATE */
-
     if(xrState.object.mixer){
       xrState.object.mixer.update(delta)
     }
+
+    /* BUILDING SCALE + RISE */
+
+    const b=xrState.object.building
+
+    if(b){
+
+      const s=b.scale.x
+
+      if(s<1){
+        const ns=THREE.MathUtils.lerp(s,1,0.08)
+        b.scale.set(ns,ns,ns)
+      }
+
+      b.position.y+=0.002
+    }
+
   })
 
   return(
     <>
       <mesh ref={reticle} visible={false}>
-        <ringGeometry args={[0.05,0.07,32]} />
+        <ringGeometry args={[0.05,0.07,32]}/>
         <meshBasicMaterial color="white"/>
       </mesh>
 
@@ -251,8 +271,7 @@ export default function ARScene(){
       height:"65vh",
       borderRadius:"24px",
       overflow:"hidden",
-      background:"#000",
-      position:"relative"
+      background:"#000"
     }}>
       <Canvas shadows>
         <XR store={store}>
