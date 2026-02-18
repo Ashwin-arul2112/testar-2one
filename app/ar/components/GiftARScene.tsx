@@ -14,10 +14,12 @@ export const store=createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
-/* GLOBAL */
+/* GLOBAL LOCKED STATE */
 
 export const xrState={
   placed:false,
+  isAnimating:false,
+  isRedirecting:false,
   object:null as {
     anchor:any
     object:THREE.Group
@@ -45,18 +47,16 @@ function PlacementSystem(){
 
     xr.requestReferenceSpace("viewer")
     .then((viewer)=>{
-
       ;(xr as any)
       .requestHitTestSource({space:viewer})
       .then((src:any)=>{
         hitSource.current=src
       })
-
     })
 
   },[session])
 
-  /* TAP */
+  /* TAP HANDLER */
 
   useEffect(()=>{
 
@@ -67,11 +67,17 @@ function PlacementSystem(){
 
       if(!lastHit.current) return
 
-      /* PLAY OPEN */
+      /* BLOCK AFTER REDIRECT */
 
-      if(xrState.placed && xrState.object?.actions){
+      if(xrState.isRedirecting) return
 
-        xrState.object.actions.forEach(a=>{
+      /* SECOND TAP → PLAY */
+
+      if(xrState.placed && !xrState.isAnimating){
+
+        xrState.isAnimating=true
+
+        xrState.object?.actions?.forEach(a=>{
           a.stop()
           a.reset()
           a.play()
@@ -80,7 +86,11 @@ function PlacementSystem(){
         return
       }
 
-      /* PLACE */
+      /* BLOCK ANYTHING AFTER FIRST PLACE */
+
+      if(xrState.placed) return
+
+      /* FIRST TAP → PLACE */
 
       ;(lastHit.current as any)
       .createAnchor()
@@ -108,8 +118,7 @@ function PlacementSystem(){
 
           giftGLTF.animations.forEach((clip)=>{
 
-            const action=
-            mixer!.clipAction(clip,pivot)
+            const action=mixer!.clipAction(clip,pivot)
 
             action.setLoop(THREE.LoopOnce,1)
             action.clampWhenFinished=true
@@ -121,6 +130,9 @@ function PlacementSystem(){
           /* AFTER OPEN */
 
           mixer.addEventListener("finished",async ()=>{
+
+            if(xrState.isRedirecting) return
+            xrState.isRedirecting=true
 
             if(!session) return
 
@@ -149,7 +161,7 @@ function PlacementSystem(){
 
   },[session])
 
-  /* FRAME */
+  /* FRAME LOOP */
 
   useFrame((_,delta,frame)=>{
 
@@ -172,13 +184,11 @@ function PlacementSystem(){
     lastHit.current=hits[0]
 
     reticle.current.visible=true
-
     reticle.current.position.set(
       pose.transform.position.x,
       pose.transform.position.y,
       pose.transform.position.z
     )
-
     reticle.current.rotation.x=-Math.PI/2
 
     if(!xrState.object) return
@@ -227,26 +237,12 @@ function PlacementSystem(){
 
 export default function GiftARScene(){
 
-  useEffect(()=>{
-
-    const start=async()=>{
-      if(!navigator.xr) return
-      await store.enterAR()
-    }
-
-    window.addEventListener("start-webxr",start)
-    return()=>window.removeEventListener("start-webxr",start)
-
-  },[])
-
   return(
     <div style={{width:"100%",height:"100%"}}>
       <Canvas
         shadows
         gl={{antialias:true,alpha:true}}
         onCreated={({gl,scene})=>{
-
-          /* CRITICAL FOR AR */
 
           gl.autoClear=false
           scene.background=null
