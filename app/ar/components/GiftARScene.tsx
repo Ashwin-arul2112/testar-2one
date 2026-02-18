@@ -19,7 +19,8 @@ export const xrState={
   redirecting:false,
   object:null as {
     anchor:any
-    object:THREE.Group
+    anchorGroup:THREE.Group
+    pivot:THREE.Group
     mixer?:THREE.AnimationMixer
     actions?:THREE.AnimationAction[]
   }|null
@@ -61,14 +62,13 @@ function PlacementSystem(){
       if(!lastHit.current) return
       if(xrState.redirecting) return
 
-      /* SECOND TAP → PLAY */
+      /* SECOND TAP */
 
       if(xrState.placed && !xrState.animating){
 
         xrState.animating=true
 
         xrState.object?.actions?.forEach(a=>{
-          a.stop()
           a.reset()
           a.play()
         })
@@ -76,18 +76,14 @@ function PlacementSystem(){
         return
       }
 
-      /* BLOCK MULTI SELECT */
-
       if(xrState.placed || xrState.placing) return
       xrState.placing=true
-
-      /* PLACE */
 
       ;(lastHit.current as any)
       .createAnchor()
       .then((anchor:any)=>{
 
-        /* CLONE ROOT */
+        /* CLONE */
 
         const cloned=SkeletonUtils.clone(giftGLTF.scene)
 
@@ -101,7 +97,18 @@ function PlacementSystem(){
         cloned.scale.setScalar(0.6/max)
         cloned.updateMatrixWorld(true)
 
-        /* 🔴 MIXER MUST BIND TO CLONED ROOT */
+        /* XR DRIVEN GROUP */
+
+        const anchorGroup=new THREE.Group()
+
+        /* ANIMATION DRIVEN GROUP */
+
+        const pivot=new THREE.Group()
+        pivot.add(cloned)
+
+        anchorGroup.add(pivot)
+
+        /* MIXER ON CLONED ROOT */
 
         let mixer:THREE.AnimationMixer|undefined
         let actions:THREE.AnimationAction[]=[]
@@ -126,26 +133,23 @@ function PlacementSystem(){
             if(xrState.redirecting) return
             xrState.redirecting=true
 
-            if(!session) return
-
             try{
               await (session as XRSession).end()
               setTimeout(()=>{
                 router.push("/ar/building")
               },500)
-            }catch(e){
-              console.warn(e)
-            }
-
+            }catch(e){}
           })
         }
 
-        /* NOW WRAP */
+        xrState.object={
+          anchor,
+          anchorGroup,
+          pivot,
+          mixer,
+          actions
+        }
 
-        const pivot=new THREE.Group()
-        pivot.add(cloned)
-
-        xrState.object={anchor,object:pivot,mixer,actions}
         xrState.placed=true
       })
     }
@@ -193,22 +197,20 @@ function PlacementSystem(){
 
     if(!objPose) return
 
-    xrState.object.object.position.set(
+    xrState.object.anchorGroup.position.set(
       objPose.transform.position.x,
       objPose.transform.position.y,
       objPose.transform.position.z
     )
 
-    xrState.object.object.quaternion.set(
+    xrState.object.anchorGroup.quaternion.set(
       objPose.transform.orientation.x,
       objPose.transform.orientation.y,
       objPose.transform.orientation.z,
       objPose.transform.orientation.w
     )
 
-    if(xrState.object.mixer){
-      xrState.object.mixer.update(delta)
-    }
+    xrState.object.mixer?.update(delta)
   })
 
   return(
@@ -219,7 +221,7 @@ function PlacementSystem(){
       </mesh>
 
       {xrState.object && (
-        <primitive object={xrState.object.object}/>
+        <primitive object={xrState.object.anchorGroup}/>
       )}
     </>
   )
@@ -237,7 +239,6 @@ export default function GiftARScene(){
           scene.background=null
           gl.outputColorSpace=THREE.SRGBColorSpace
           gl.toneMapping=THREE.ACESFilmicToneMapping
-          gl.toneMappingExposure=1
         }}
       >
         <XR store={store}>
