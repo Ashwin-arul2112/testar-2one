@@ -9,8 +9,7 @@ import * as THREE from "three"
 import { SkeletonUtils } from "three-stdlib"
 
 export const store=createXRStore({
-  requiredFeatures:["hit-test","anchors","local-floor"],
-  optionalFeatures:["light-estimation"]
+  requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
 export const xrState={
@@ -64,12 +63,10 @@ function PlacementSystem(){
     if(!session) return
     const xr=session as XRSession
 
-    const onSelect=()=>{
+    const onSelect=async()=>{
 
       if(!lastHit.current) return
       if(!localSpace.current) return
-
-      /* PLAY ANIMATION */
 
       if(xrState.placed && xrState.object?.actions){
         xrState.object.actions.forEach(a=>{
@@ -80,62 +77,67 @@ function PlacementSystem(){
         return
       }
 
-      /* GET HIT WORLD POSE */
-
       const hitPose=
       lastHit.current.getPose(localSpace.current)
-
       if(!hitPose) return
 
-      /* CREATE ANCHOR AT WORLD POSE */
+      /* CREATE OFFSET SPACE FIRST */
 
-      ;(lastHit.current as any)
-      .createAnchor(hitPose.transform)
-      .then((anchor:any)=>{
+      const anchorSpace=
+      localSpace.current.getOffsetReferenceSpace(
+        new XRRigidTransform(
+          hitPose.transform.position,
+          hitPose.transform.orientation
+        )
+      )
 
-        const model=SkeletonUtils.clone(gltf.scene)
+      const anchor=
+      await (xr as any).requestAnchor(anchorSpace)
 
-        const box=new THREE.Box3().setFromObject(model)
-        const size=new THREE.Vector3()
-        box.getSize(size)
-        const max=Math.max(size.x,size.y,size.z)
+      /* MODEL */
 
-        model.scale.setScalar(REAL_WORLD_SIZE/max)
-        model.updateMatrixWorld(true)
+      const model=SkeletonUtils.clone(gltf.scene)
 
-        model.traverse((o:any)=>{
-          if(o.isMesh){
-            o.castShadow=true
-            o.receiveShadow=true
-          }
-        })
+      const box=new THREE.Box3().setFromObject(model)
+      const size=new THREE.Vector3()
+      box.getSize(size)
+      const max=Math.max(size.x,size.y,size.z)
 
-        const pivot=new THREE.Group()
-        pivot.add(model)
+      model.scale.setScalar(REAL_WORLD_SIZE/max)
+      model.updateMatrixWorld(true)
 
-        let mixer:THREE.AnimationMixer|undefined
-        let actions:THREE.AnimationAction[]=[]
-
-        if(gltf.animations.length){
-
-          mixer=new THREE.AnimationMixer(pivot)
-
-          gltf.animations.forEach((clip)=>{
-
-            const action=
-            mixer!.clipAction(clip,pivot)
-
-            action.setLoop(THREE.LoopOnce,1)
-            action.clampWhenFinished=true
-            action.paused=true
-
-            actions.push(action)
-          })
+      model.traverse((o:any)=>{
+        if(o.isMesh){
+          o.castShadow=true
+          o.receiveShadow=true
         }
-
-        xrState.object={anchor,pivot,mixer,actions}
-        xrState.placed=true
       })
+
+      const pivot=new THREE.Group()
+      pivot.add(model)
+
+      let mixer:THREE.AnimationMixer|undefined
+      let actions:THREE.AnimationAction[]=[]
+
+      if(gltf.animations.length){
+
+        mixer=new THREE.AnimationMixer(pivot)
+
+        gltf.animations.forEach((clip)=>{
+
+          const action=
+          mixer!.clipAction(clip,pivot)
+
+          action.setLoop(THREE.LoopOnce,1)
+          action.clampWhenFinished=true
+          action.paused=true
+
+          actions.push(action)
+        })
+      }
+
+      xrState.object={anchor,pivot,mixer,actions}
+      xrState.placed=true
     }
 
     xr.addEventListener("select",onSelect)
@@ -167,13 +169,6 @@ function PlacementSystem(){
       pose.transform.position.x,
       pose.transform.position.y,
       pose.transform.position.z
-    )
-
-    reticle.current.quaternion.set(
-      pose.transform.orientation.x,
-      pose.transform.orientation.y,
-      pose.transform.orientation.z,
-      pose.transform.orientation.w
     )
 
     reticle.current.rotation.x=-Math.PI/2
@@ -228,25 +223,16 @@ function PlacementSystem(){
 export default function ARScene(){
 
   useEffect(()=>{
-
     const start=async()=>{
       if(!navigator.xr) return
       await store.enterAR()
     }
-
     window.addEventListener("start-webxr",start)
     return()=>window.removeEventListener("start-webxr",start)
-
   },[])
 
   return(
-    <div style={{
-      width:"100%",
-      height:"65vh",
-      borderRadius:"24px",
-      overflow:"hidden",
-      background:"#000"
-    }}>
+    <div style={{width:"100%",height:"65vh",overflow:"hidden"}}>
       <Canvas
         shadows
         gl={{antialias:true,alpha:true}}
