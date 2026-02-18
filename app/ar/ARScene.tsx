@@ -2,7 +2,8 @@
 
 import { Canvas, useFrame } from "@react-three/fiber"
 import { XR, createXRStore, useXR } from "@react-three/xr"
-import { useGLTF } from "@react-three/drei"
+import { useGLTF, Environment } from "@react-three/drei"
+import { EffectComposer, Noise } from "@react-three/postprocessing"
 import { useEffect, useRef } from "react"
 import * as THREE from "three"
 import { SkeletonUtils } from "three-stdlib"
@@ -10,7 +11,8 @@ import { SkeletonUtils } from "three-stdlib"
 /* XR STORE */
 
 export const store = createXRStore({
-  requiredFeatures:["hit-test","anchors","local-floor"]
+  requiredFeatures:["hit-test","anchors","local-floor"],
+  optionalFeatures:["light-estimation"]
 } as any)
 
 /* GLOBAL STATE */
@@ -19,11 +21,15 @@ export const xrState={
   placed:false,
   object:null as {
     anchor:any
-    object:THREE.Object3D
+    pivot:THREE.Group
     mixer?:THREE.AnimationMixer
     actions?:THREE.AnimationAction[]
   }|null
 }
+
+/* REAL WORLD SIZE (METERS) */
+
+const REAL_WORLD_SIZE=0.6
 
 /* PLACEMENT SYSTEM */
 
@@ -36,92 +42,95 @@ function PlacementSystem(){
   const lastHit   = useRef<any>(null)
   const reticle   = useRef<THREE.Mesh>(null!)
 
-  /* HIT TEST */
-
   useEffect(()=>{
 
     if(!session) return
-    const xr = session as XRSession
+    const xr=session as XRSession
 
     xr.requestReferenceSpace("viewer")
-    .then((viewer:XRReferenceSpace)=>{
+    .then((viewer)=>{
 
       ;(xr as any)
       .requestHitTestSource({space:viewer})
       .then((src:any)=>{
-        hitSource.current = src
+        hitSource.current=src
       })
 
     })
 
   },[session])
 
-  /* TAP */
-
   useEffect(()=>{
 
     if(!session) return
-    const xr = session as XRSession
+    const xr=session as XRSession
 
-    const onSelect = ()=>{
+    const onSelect=()=>{
 
       if(!lastHit.current) return
 
-      /* SECOND TAP → PLAY ANIMATION */
+      /* REVEAL ANIMATION */
 
       if(xrState.placed && xrState.object?.actions){
 
-        xrState.object.actions.forEach((a)=>{
+        xrState.object.actions.forEach(a=>{
+          a.stop()
           a.reset()
-          a.paused=false
           a.play()
         })
 
         return
       }
 
-      /* FIRST TAP → PLACE */
+      /* PLACE */
 
       ;(lastHit.current as any)
       .createAnchor()
       .then((anchor:any)=>{
 
-        /* USE THIS INSTEAD OF scene.clone() */
-        const model = SkeletonUtils.clone(gltf.scene)
+        const model=SkeletonUtils.clone(gltf.scene)
 
         /* AUTO SCALE */
 
-        const box  = new THREE.Box3().setFromObject(model)
-        const size = new THREE.Vector3()
+        const box=new THREE.Box3().setFromObject(model)
+        const size=new THREE.Vector3()
         box.getSize(size)
-        const max = Math.max(size.x,size.y,size.z)
-        model.scale.setScalar(0.6/max)
+        const max=Math.max(size.x,size.y,size.z)
 
-        /* ANIMATION FIX */
+        model.scale.setScalar(REAL_WORLD_SIZE/max)
+        model.updateMatrixWorld(true)
+
+        /* SHADOW ENABLE */
+
+        model.traverse((o:any)=>{
+          if(o.isMesh){
+            o.castShadow=true
+            o.receiveShadow=true
+          }
+        })
+
+        /* PIVOT FIX (PREVENT ANIMATION DRIFT) */
+
+        const pivot=new THREE.Group()
+        pivot.add(model)
+
+        /* ANIMATION */
 
         let mixer:THREE.AnimationMixer|undefined
         let actions:THREE.AnimationAction[]=[]
 
         if(gltf.animations.length){
 
-          mixer = new THREE.AnimationMixer(model)
+          mixer=new THREE.AnimationMixer(pivot)
 
           gltf.animations.forEach((clip)=>{
 
-            const action =
+            const action=
             mixer!
-            .clipAction(
-              THREE.AnimationClip.findByName(
-                gltf.animations,
-                clip.name
-              )!,
-              model
-            )
+            .clipAction(clip,pivot)
 
-            action.reset()
             action.setLoop(THREE.LoopOnce,1)
             action.clampWhenFinished=true
-            action.enabled=true
             action.paused=true
 
             actions.push(action)
@@ -130,7 +139,7 @@ function PlacementSystem(){
 
         xrState.object={
           anchor,
-          object:model,
+          pivot,
           mixer,
           actions
         }
@@ -144,19 +153,15 @@ function PlacementSystem(){
 
   },[session])
 
-  /* FRAME LOOP */
-
   useFrame((_,delta,frame)=>{
 
     if(!frame) return
     if(!hitSource.current) return
 
-    const refSpace=
-    store.getState().originReferenceSpace
+    const refSpace=store.getState().originReferenceSpace
     if(!refSpace) return
 
-    const hits=
-    frame.getHitTestResults(hitSource.current)
+    const hits=frame.getHitTestResults(hitSource.current)
 
     if(hits.length===0){
       reticle.current.visible=false
@@ -193,22 +198,18 @@ function PlacementSystem(){
 
     if(!objPose) return
 
-    xrState.object.object.visible=true
-
-    xrState.object.object.position.set(
+    xrState.object.pivot.position.set(
       objPose.transform.position.x,
       objPose.transform.position.y,
       objPose.transform.position.z
     )
 
-    xrState.object.object.quaternion.set(
+    xrState.object.pivot.quaternion.set(
       objPose.transform.orientation.x,
       objPose.transform.orientation.y,
       objPose.transform.orientation.z,
       objPose.transform.orientation.w
     )
-
-    /* DELTA TIME UPDATE */
 
     if(xrState.object.mixer){
       xrState.object.mixer.update(delta)
@@ -218,12 +219,19 @@ function PlacementSystem(){
   return(
     <>
       <mesh ref={reticle} visible={false}>
-        <ringGeometry args={[0.05,0.07,32]} />
+        <ringGeometry args={[0.05,0.07,32]}/>
         <meshBasicMaterial color="white"/>
       </mesh>
 
+      {/* CONTACT SHADOW */}
+
+      <mesh rotation={[-Math.PI/2,0,0]} receiveShadow position={[0,-0.001,0]}>
+        <planeGeometry args={[5,5]}/>
+        <shadowMaterial opacity={0.35}/>
+      </mesh>
+
       {xrState.object && (
-        <primitive object={xrState.object.object}/>
+        <primitive object={xrState.object.pivot}/>
       )}
     </>
   )
@@ -251,13 +259,34 @@ export default function ARScene(){
       height:"65vh",
       borderRadius:"24px",
       overflow:"hidden",
-      background:"#000",
-      position:"relative"
+      background:"#000"
     }}>
-      <Canvas shadows>
+      <Canvas
+        shadows
+        gl={{
+          antialias:true,
+          alpha:true
+        }}
+        onCreated={({gl})=>{
+
+          gl.outputColorSpace = THREE.SRGBColorSpace
+          gl.toneMapping = THREE.ACESFilmicToneMapping
+          gl.toneMappingExposure = 1
+
+        }}
+      >
+
         <XR store={store}>
-          <ambientLight intensity={0.6}/>
+
+          <ambientLight intensity={0.5}/>
+          <Environment preset="apartment"/>
+
           <PlacementSystem/>
+
+          <EffectComposer>
+            <Noise opacity={0.025}/>
+          </EffectComposer>
+
         </XR>
       </Canvas>
     </div>
