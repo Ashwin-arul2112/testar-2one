@@ -6,239 +6,257 @@ import { useGLTF } from "@react-three/drei"
 import { useEffect, useRef } from "react"
 import * as THREE from "three"
 import { SkeletonUtils } from "three-stdlib"
-import { useRouter } from "next/navigation"
 
 /* XR STORE */
 
-export const store=createXRStore({
+export const store = createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
-/* SESSION LOCK STATE */
+/* GLOBAL STATE */
 
-const sessionState={
-  hitSource:null as XRHitTestSource|null,
-  listenerAdded:false,
-  placing:false,
+export const xrState={
   placed:false,
-  animating:false,
-  redirecting:false
+  object:null as {
+    anchor:any
+    object:THREE.Object3D
+    mixer?:THREE.AnimationMixer
+    actions?:THREE.AnimationAction[]
+  }|null
 }
+
+/* PLACEMENT SYSTEM */
 
 function PlacementSystem(){
 
-  const {session}=useXR()
-  const router=useRouter()
-  const giftGLTF=useGLTF("/models/gift_box.glb")
+  const { session } = useXR()
+  const gltf = useGLTF("/models/gift_box.glb")
 
-  const localSpace=useRef<XRReferenceSpace|null>(null)
-  const lastHit=useRef<any>(null)
-  const reticle=useRef<THREE.Mesh>(null!)
+  const hitSource = useRef<any>(null)
+  const lastHit   = useRef<any>(null)
+  const reticle   = useRef<THREE.Mesh>(null!)
 
-  const anchorGroup=useRef<THREE.Group|null>(null)
-  const mixer=useRef<THREE.AnimationMixer|null>(null)
-  const actions=useRef<THREE.AnimationAction[]>([])
-
-  /* RUN ONLY WHEN XR SESSION CHANGES */
+  /* HIT TEST */
 
   useEffect(()=>{
 
     if(!session) return
+    const xr = session as XRSession
 
-    /* RESET ON NEW SESSION */
-
-    sessionState.hitSource=null
-    sessionState.listenerAdded=false
-    sessionState.placing=false
-    sessionState.placed=false
-    sessionState.animating=false
-    sessionState.redirecting=false
-
-    const xr=session as XRSession
-
-    Promise.all([
-      xr.requestReferenceSpace("viewer"),
-      xr.requestReferenceSpace("local-floor")
-    ])
-    .then(([viewer,local])=>{
-
-      localSpace.current=local
+    xr.requestReferenceSpace("viewer")
+    .then((viewer:XRReferenceSpace)=>{
 
       ;(xr as any)
       .requestHitTestSource({space:viewer})
       .then((src:any)=>{
-        sessionState.hitSource=src
+        hitSource.current = src
       })
+
     })
 
-    if(sessionState.listenerAdded) return
-    sessionState.listenerAdded=true
+  },[session])
 
-    const onSelect=()=>{
+  /* TAP */
+
+  useEffect(()=>{
+
+    if(!session) return
+    const xr = session as XRSession
+
+    const onSelect = ()=>{
 
       if(!lastHit.current) return
-      if(sessionState.redirecting) return
 
-      /* SECOND TAP → PLAY */
+      /* SECOND TAP → PLAY ANIMATION */
 
-      if(sessionState.placed && !sessionState.animating){
+      if(xrState.placed && xrState.object?.actions){
 
-        sessionState.animating=true
-        actions.current.forEach(a=>a.reset().play())
+        xrState.object.actions.forEach((a)=>{
+          a.reset()
+          a.paused=false
+          a.play()
+        })
+
         return
       }
 
-      /* BLOCK MULTI PLACE */
-
-      if(sessionState.placed || sessionState.placing) return
-      sessionState.placing=true
-
-      const hitPose=
-      lastHit.current.getPose(localSpace.current!)
-
-      if(!hitPose) return
+      /* FIRST TAP → PLACE */
 
       ;(lastHit.current as any)
-      .createAnchor(hitPose.transform)
+      .createAnchor()
       .then((anchor:any)=>{
 
-        const model=
-        SkeletonUtils.clone(giftGLTF.scene)
+        /* USE THIS INSTEAD OF scene.clone() */
+        const model = SkeletonUtils.clone(gltf.scene)
 
-        const box=new THREE.Box3().setFromObject(model)
-        const size=new THREE.Vector3()
+        /* AUTO SCALE */
+
+        const box  = new THREE.Box3().setFromObject(model)
+        const size = new THREE.Vector3()
         box.getSize(size)
-        const max=Math.max(size.x,size.y,size.z)
-
+        const max = Math.max(size.x,size.y,size.z)
         model.scale.setScalar(0.6/max)
 
-        const liftBox=new THREE.Box3().setFromObject(model)
-        const liftSize=new THREE.Vector3()
-        liftBox.getSize(liftSize)
-        model.position.y=liftSize.y/2
+        /* ANIMATION FIX */
 
-        const pivot=new THREE.Group()
-        pivot.add(model)
+        let mixer:THREE.AnimationMixer|undefined
+        let actions:THREE.AnimationAction[]=[]
 
-        anchorGroup.current=new THREE.Group()
-        anchorGroup.current.add(pivot)
+        if(gltf.animations.length){
 
-        mixer.current=new THREE.AnimationMixer(pivot)
+          mixer = new THREE.AnimationMixer(model)
 
-        giftGLTF.animations.forEach((clip)=>{
+          gltf.animations.forEach((clip)=>{
 
-          const action=mixer.current!.clipAction(clip)
-          action.setLoop(THREE.LoopOnce,1)
-          action.clampWhenFinished=true
-          action.paused=true
+            const action =
+            mixer!
+            .clipAction(
+              THREE.AnimationClip.findByName(
+                gltf.animations,
+                clip.name
+              )!,
+              model
+            )
 
-          actions.current.push(action)
-        })
+            action.reset()
+            action.setLoop(THREE.LoopOnce,1)
+            action.clampWhenFinished=true
+            action.enabled=true
+            action.paused=true
 
-        mixer.current.addEventListener("finished",async ()=>{
+            actions.push(action)
+          })
+        }
 
-          if(sessionState.redirecting) return
-          sessionState.redirecting=true
+        xrState.object={
+          anchor,
+          object:model,
+          mixer,
+          actions
+        }
 
-          await xr.end()
-
-          setTimeout(()=>{
-            router.push("/ar/building")
-          },500)
-        })
-
-        sessionState.placed=true
+        xrState.placed=true
       })
     }
 
     xr.addEventListener("select",onSelect)
-
-    return()=>{
-      xr.removeEventListener("select",onSelect)
-    }
+    return()=>xr.removeEventListener("select",onSelect)
 
   },[session])
+
+  /* FRAME LOOP */
 
   useFrame((_,delta,frame)=>{
 
     if(!frame) return
-    if(!sessionState.hitSource) return
-    if(!localSpace.current) return
+    if(!hitSource.current) return
+
+    const refSpace=
+    store.getState().originReferenceSpace
+    if(!refSpace) return
 
     const hits=
-    frame.getHitTestResults(sessionState.hitSource)
+    frame.getHitTestResults(hitSource.current)
 
     if(hits.length===0){
       reticle.current.visible=false
       return
     }
 
-    const pose=hits[0].getPose(localSpace.current)
+    const pose=hits[0].getPose(refSpace)
     if(!pose) return
 
     lastHit.current=hits[0]
 
     reticle.current.visible=true
+
     reticle.current.position.set(
       pose.transform.position.x,
       pose.transform.position.y,
       pose.transform.position.z
     )
-    reticle.current.rotation.x=-Math.PI/2
 
-    if(!anchorGroup.current) return
+    reticle.current.quaternion.set(
+      pose.transform.orientation.x,
+      pose.transform.orientation.y,
+      pose.transform.orientation.z,
+      pose.transform.orientation.w
+    )
+
+    if(!xrState.object) return
 
     const objPose=
     frame.getPose(
-      (lastHit.current as any).anchorSpace,
-      localSpace.current
+      xrState.object.anchor.anchorSpace,
+      refSpace
     )
 
     if(!objPose) return
 
-    anchorGroup.current.position.set(
+    xrState.object.object.visible=true
+
+    xrState.object.object.position.set(
       objPose.transform.position.x,
       objPose.transform.position.y,
       objPose.transform.position.z
     )
 
-    anchorGroup.current.quaternion.set(
+    xrState.object.object.quaternion.set(
       objPose.transform.orientation.x,
       objPose.transform.orientation.y,
       objPose.transform.orientation.z,
       objPose.transform.orientation.w
     )
 
-    mixer.current?.update(delta)
+    /* DELTA TIME UPDATE */
+
+    if(xrState.object.mixer){
+      xrState.object.mixer.update(delta)
+    }
   })
 
   return(
     <>
       <mesh ref={reticle} visible={false}>
-        <ringGeometry args={[0.05,0.07,32]}/>
+        <ringGeometry args={[0.05,0.07,32]} />
         <meshBasicMaterial color="white"/>
       </mesh>
 
-      {anchorGroup.current && (
-        <primitive object={anchorGroup.current}/>
+      {xrState.object && (
+        <primitive object={xrState.object.object}/>
       )}
     </>
   )
 }
 
-export default function GiftARScene(){
+/* MAIN */
+
+export default function ARScene(){
+
+  useEffect(()=>{
+
+    const start=async()=>{
+      if(!navigator.xr) return
+      await store.enterAR()
+    }
+
+    window.addEventListener("start-webxr",start)
+    return()=>window.removeEventListener("start-webxr",start)
+
+  },[])
 
   return(
-    <div style={{width:"100%",height:"100%"}}>
-      <Canvas
-        gl={{antialias:true,alpha:true}}
-        onCreated={({gl,scene})=>{
-          gl.autoClear=false
-          scene.background=null
-        }}
-      >
+    <div style={{
+      width:"100%",
+      height:"65vh",
+      borderRadius:"24px",
+      overflow:"hidden",
+      background:"#000",
+      position:"relative"
+    }}>
+      <Canvas shadows>
         <XR store={store}>
-          <ambientLight intensity={1}/>
+          <ambientLight intensity={0.6}/>
           <PlacementSystem/>
         </XR>
       </Canvas>
