@@ -6,27 +6,32 @@ import { useGLTF } from "@react-three/drei"
 import { useEffect, useRef } from "react"
 import * as THREE from "three"
 
-/* ✔ v10 SESSION FEATURES MUST BE HERE ONLY */
+/* ---------------- XR STORE ---------------- */
+
 export const store = createXRStore({
-  requiredFeatures:[
-    "hit-test",
-    "anchors",
-    "local-floor"
-  ]
+  requiredFeatures:["hit-test","anchors","local-floor"]
 } as any)
 
-/* ✔ SINGLE OBJECT ONLY */
+/* ---------------- GLOBAL XR STATE ---------------- */
+
 export const xrState={
   placed:false,
-  object:null as any
+  object:null as {
+    anchor:any
+    object:THREE.Object3D
+    mixer?:THREE.AnimationMixer
+    actions?:THREE.AnimationAction[]
+  }|null
 }
 
-/* ---------------- SYSTEM ---------------- */
+/* ---------------- PLACEMENT SYSTEM ---------------- */
 
 function PlacementSystem(){
 
   const { session } = useXR()
-  const { scene } = useGLTF("/models/gift_box.glb")
+
+  /* CHANGE MODEL PATH HERE */
+  const gltf = useGLTF("/models/gift_box.glb")
 
   const hitSource = useRef<any>(null)
   const lastHit   = useRef<any>(null)
@@ -52,7 +57,7 @@ function PlacementSystem(){
 
   },[session])
 
-  /* ---------- TAP = PLACE ONCE ---------- */
+  /* ---------- TAP ---------- */
 
   useEffect(()=>{
 
@@ -62,27 +67,64 @@ function PlacementSystem(){
     const onSelect = ()=>{
 
       if(!lastHit.current) return
-      if(xrState.placed) return
+
+      /* SECOND TAP → PLAY ANIMATION */
+
+      if(xrState.placed && xrState.object?.actions){
+
+        xrState.object.actions.forEach((a)=>{
+          a.reset()
+          a.paused=false
+          a.play()
+        })
+
+        return
+      }
+
+      /* FIRST TAP → PLACE */
 
       ;(lastHit.current as any)
       .createAnchor()
       .then((anchor:any)=>{
 
-        const model = scene.clone(true)
+        const model = gltf.scene.clone(true)
 
-        /* REAL WORLD TABLE SIZE */
+        /* AUTO SCALE */
 
         const box  = new THREE.Box3().setFromObject(model)
         const size = new THREE.Vector3()
         box.getSize(size)
-
         const max = Math.max(size.x,size.y,size.z)
-
         model.scale.setScalar(0.12/max)
+
+        /* ---------- ANIMATION ---------- */
+
+        let mixer:THREE.AnimationMixer|undefined
+        let actions:THREE.AnimationAction[]=[]
+
+        if(gltf.animations.length){
+
+          mixer = new THREE.AnimationMixer(model)
+
+          actions = gltf.animations.map((clip)=>{
+
+            const action =
+            mixer!
+            .clipAction(clip)
+
+            action.setLoop(THREE.LoopOnce,1)
+            action.clampWhenFinished=true
+            action.paused=true   // wait for tap
+
+            return action
+          })
+        }
 
         xrState.object={
           anchor,
-          object:model
+          object:model,
+          mixer,
+          actions
         }
 
         xrState.placed=true
@@ -94,18 +136,18 @@ function PlacementSystem(){
 
   },[session])
 
-  /* ---------- RETICLE TRACK ---------- */
+  /* ---------- FRAME LOOP ---------- */
 
-  useFrame((_,__,frame)=>{
+  useFrame((_,delta,frame)=>{
 
     if(!frame) return
     if(!hitSource.current) return
 
-    const refSpace =
+    const refSpace=
     store.getState().originReferenceSpace
     if(!refSpace) return
 
-    const hits =
+    const hits=
     frame.getHitTestResults(hitSource.current)
 
     if(hits.length===0){
@@ -113,11 +155,10 @@ function PlacementSystem(){
       return
     }
 
-    const pose =
-    hits[0].getPose(refSpace)
+    const pose=hits[0].getPose(refSpace)
     if(!pose) return
 
-    lastHit.current = hits[0]
+    lastHit.current=hits[0]
 
     reticle.current.visible=true
 
@@ -134,11 +175,9 @@ function PlacementSystem(){
       pose.transform.orientation.w
     )
 
-    /* UPDATE SINGLE OBJECT */
-
     if(!xrState.object) return
 
-    const objPose =
+    const objPose=
     frame.getPose(
       xrState.object.anchor.anchorSpace,
       refSpace
@@ -160,6 +199,12 @@ function PlacementSystem(){
       objPose.transform.orientation.z,
       objPose.transform.orientation.w
     )
+
+    /* ANIMATION UPDATE */
+
+    if(xrState.object.mixer){
+      xrState.object.mixer.update(delta)
+    }
   })
 
   return(
@@ -182,7 +227,7 @@ export default function ARScene(){
 
   useEffect(()=>{
 
-    const start = async()=>{
+    const start=async()=>{
       if(!navigator.xr) return
       await store.enterAR()
     }
@@ -203,14 +248,9 @@ export default function ARScene(){
         position:"relative"
       }}
     >
-      <Canvas
-        style={{
-          width:"100%",
-          height:"100%"
-        }}
-      >
+      <Canvas shadows>
         <XR store={store}>
-          <ambientLight intensity={1}/>
+          <ambientLight intensity={0.6}/>
           <PlacementSystem/>
         </XR>
       </Canvas>
