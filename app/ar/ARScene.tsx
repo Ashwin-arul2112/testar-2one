@@ -8,14 +8,10 @@ import { useEffect, useRef } from "react"
 import * as THREE from "three"
 import { SkeletonUtils } from "three-stdlib"
 
-/* XR STORE */
-
 export const store=createXRStore({
   requiredFeatures:["hit-test","anchors","local-floor"],
   optionalFeatures:["light-estimation"]
 } as any)
-
-/* GLOBAL */
 
 export const xrState={
   placed:false,
@@ -29,8 +25,6 @@ export const xrState={
 
 const REAL_WORLD_SIZE=0.6
 
-/* SYSTEM */
-
 function PlacementSystem(){
 
   const {session}=useXR()
@@ -41,8 +35,6 @@ function PlacementSystem(){
   const localSpace=useRef<XRReferenceSpace|null>(null)
   const lastHit=useRef<any>(null)
   const reticle=useRef<THREE.Mesh>(null!)
-
-  /* HIT TEST FIX */
 
   useEffect(()=>{
 
@@ -59,17 +51,13 @@ function PlacementSystem(){
       localSpace.current=local
 
       ;(xr as any)
-      .requestHitTestSource({
-        space:viewerSpace.current!
-      })
+      .requestHitTestSource({space:viewer})
       .then((src:any)=>{
         hitSource.current=src
       })
     })
 
   },[session])
-
-  /* TAP */
 
   useEffect(()=>{
 
@@ -79,6 +67,9 @@ function PlacementSystem(){
     const onSelect=()=>{
 
       if(!lastHit.current) return
+      if(!localSpace.current) return
+
+      /* PLAY ANIMATION */
 
       if(xrState.placed && xrState.object?.actions){
         xrState.object.actions.forEach(a=>{
@@ -89,8 +80,17 @@ function PlacementSystem(){
         return
       }
 
+      /* GET HIT WORLD POSE */
+
+      const hitPose=
+      lastHit.current.getPose(localSpace.current)
+
+      if(!hitPose) return
+
+      /* CREATE ANCHOR AT WORLD POSE */
+
       ;(lastHit.current as any)
-      .createAnchor()
+      .createAnchor(hitPose.transform)
       .then((anchor:any)=>{
 
         const model=SkeletonUtils.clone(gltf.scene)
@@ -142,8 +142,6 @@ function PlacementSystem(){
     return()=>xr.removeEventListener("select",onSelect)
 
   },[session])
-
-  /* FRAME */
 
   useFrame((_,delta,frame)=>{
 
@@ -226,8 +224,6 @@ function PlacementSystem(){
     </>
   )
 }
-
-/* MAIN */
 
 export default function ARScene(){
 
